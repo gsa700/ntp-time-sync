@@ -46,7 +46,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -661,27 +661,20 @@ def self_update(url):
     # PyInstaller remove its onefile temp dir) before the new instance starts.
     # Launching the exe directly from the dying process triggers a spurious
     # "failed to remove temporary directory" dialog on onefile builds.
+    # Relaunch via a hidden PowerShell: Wait-Process reliably blocks until THIS
+    # process exits (so the onefile temp dir is cleaned up first), then a short
+    # settle lets antivirus finish scanning the fresh exe before Start-Process
+    # launches it. Far more robust than a batch tasklist loop.
     try:
-        pid = os.getpid()
-        helper = os.path.join(folder, "relaunch.cmd")
-        with open(helper, "w") as f:
-            f.write('@echo off\r\n')
-            f.write(':waitpid\r\n')                    # wait for THIS process to fully exit
-            f.write('tasklist /fi "PID eq %d" 2>nul | find "%d" >nul\r\n' % (pid, pid))
-            f.write('if errorlevel 1 goto ready\r\n')
-            f.write('ping 127.0.0.1 -n 2 >nul\r\n')
-            f.write('goto waitpid\r\n')
-            f.write(':ready\r\n')
-            f.write('ping 127.0.0.1 -n 5 >nul\r\n')    # settle ~4s so AV finishes scanning the fresh exe
-            f.write('start "" "%s"\r\n' % exe)
-            f.write('del "%~f0"\r\n')                  # helper removes itself
-        subprocess.Popen(["cmd", "/c", helper], cwd=folder,
-                         creationflags=0x00000008 | 0x08000000)  # DETACHED | NO_WINDOW
+        ps = ("$ErrorActionPreference='SilentlyContinue';"
+              "Wait-Process -Id %d -Timeout 30;"
+              "Start-Sleep -Seconds 3;"
+              "Start-Process -FilePath '%s'") % (os.getpid(), exe)
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+            creationflags=0x08000000)  # CREATE_NO_WINDOW
     except Exception:
-        try:
-            subprocess.Popen([exe], cwd=folder)
-        except Exception:
-            pass
+        pass
     state.stop.set()
     if state.icon is not None:
         state.icon.stop()
