@@ -46,6 +46,10 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
+APP_VERSION = "1.2.0"
+REPO = "gsa700/ntp-time-sync"
+RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
+API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
 FROZEN = getattr(sys, "frozen", False)
 
 # When bundled to an .exe (PyInstaller), the program may live in a read-only
@@ -69,6 +73,8 @@ DEFAULTS = {
     "green_max_offset": 1.0,    # abs seconds - FT8 needs < ~1s
     "yellow_max_offset": 2.0,   # abs seconds
     "stale_minutes": 40,        # last sync older than this -> not green
+    "auto_check_updates": False,  # check GitHub for a newer release at startup
+    "logon_initialized": False,   # first run enables Start-at-logon by default
 }
 
 # --------------------------------------------------------------- config io
@@ -357,7 +363,6 @@ class StatusPanel:
         self.hdr = None
         self.hdr_lbl = None
         self.rows = {}
-        self.logon_var = None
         self._ready = threading.Event()
 
     def start(self):
@@ -412,43 +417,38 @@ class StatusPanel:
 
         body = tk.Frame(outer, bg=self.BODY_BG)
         body.pack(fill="both", expand=True)
-        for key, label in (("offset", "Offset"), ("server", "Server"),
-                           ("source", "Source"), ("lastsync", "Last sync")):
-            row = tk.Frame(body, bg=self.BODY_BG)
-            row.pack(fill="x", padx=14, pady=2)
-            tk.Label(row, text=label + ":", width=9, anchor="w", font=("Segoe UI", 10),
-                     bg=self.BODY_BG, fg=self.LABEL_FG).pack(side="left")
-            v = tk.Label(row, text="", anchor="w", font=("Segoe UI", 10),
+
+        # readout: label column + value column, aligned
+        rf = tk.Frame(body, bg=self.BODY_BG)
+        rf.pack(fill="x", padx=16, pady=(12, 4))
+        rf.columnconfigure(1, weight=1)
+        for i, (key, label) in enumerate((("offset", "Offset"), ("server", "Server"),
+                                          ("source", "Source"), ("lastsync", "Last sync"))):
+            tk.Label(rf, text=label + ":", anchor="w", font=("Segoe UI", 10),
+                     bg=self.BODY_BG, fg=self.LABEL_FG).grid(row=i, column=0, sticky="w", pady=2)
+            v = tk.Label(rf, text="", anchor="w", font=("Segoe UI", 10),
                          bg=self.BODY_BG, fg=self.VALUE_FG)
-            v.pack(side="left", fill="x", expand=True)
+            v.grid(row=i, column=1, sticky="w", padx=(14, 0), pady=2)
             self.rows[key] = v
 
-        tk.Frame(body, bg=self.BORDER, height=1).pack(fill="x", padx=12, pady=(8, 6))
+        tk.Frame(body, bg=self.BORDER, height=1).pack(fill="x", padx=14, pady=(10, 8))
 
-        r1 = tk.Frame(body, bg=self.BODY_BG)
-        r1.pack(fill="x", padx=10, pady=2)
-        tk.Button(r1, text="Refresh", width=12,
-                  command=lambda: threading.Thread(target=refresh_once, daemon=True).start()
-                  ).pack(side="left", padx=3)
-        tk.Button(r1, text="Resync  (admin)", width=16,
-                  command=self._do_resync).pack(side="left", padx=3)
+        # actions: uniform two-column button grid
+        bf = tk.Frame(body, bg=self.BODY_BG)
+        bf.pack(fill="x", padx=12, pady=(0, 12))
+        bf.columnconfigure(0, weight=1, uniform="btn")
+        bf.columnconfigure(1, weight=1, uniform="btn")
 
-        r2 = tk.Frame(body, bg=self.BODY_BG)
-        r2.pack(fill="x", padx=10, pady=2)
-        tk.Button(r2, text="Configure…  (admin)", width=16,
-                  command=self._do_configure).pack(side="left", padx=3)
-        tk.Button(r2, text="Open time.is", width=12,
-                  command=self._do_timeis).pack(side="left", padx=3)
+        def mkbtn(text, cmd, r, c):
+            tk.Button(bf, text=text, command=cmd, font=("Segoe UI", 9)).grid(
+                row=r, column=c, sticky="ew", padx=3, pady=3)
 
-        r3 = tk.Frame(body, bg=self.BODY_BG)
-        r3.pack(fill="x", padx=12, pady=(6, 10))
-        self.logon_var = tk.BooleanVar(master=self.root, value=logon_enabled())
-        tk.Checkbutton(r3, text="Start at logon", variable=self.logon_var,
-                       command=self._toggle_logon, bg=self.BODY_BG, fg=self.VALUE_FG,
-                       activebackground=self.BODY_BG, activeforeground=self.VALUE_FG,
-                       selectcolor="#ffffff", font=("Segoe UI", 10)).pack(side="left")
-        tk.Button(r3, text="Quit", width=8, command=self._do_quit).pack(side="right", padx=3)
-        tk.Button(r3, text="Close", width=8, command=self._hide).pack(side="right", padx=3)
+        mkbtn("Refresh",
+              lambda: threading.Thread(target=refresh_once, daemon=True).start(), 0, 0)
+        mkbtn("Resync  (admin)", self._do_resync, 0, 1)
+        mkbtn("Configure…  (admin)", self._do_configure, 1, 0)
+        mkbtn("Open time.is", self._do_timeis, 1, 1)
+        mkbtn("Close", self._hide, 2, 1)
 
         self.win.bind("<FocusOut>", self._on_focus_out)
         self.win.bind("<Escape>", lambda e: self._hide())
@@ -488,11 +488,6 @@ class StatusPanel:
     def _do_timeis(self):
         webbrowser.open("https://time.is")
 
-    def _toggle_logon(self):
-        set_logon(not logon_enabled())
-        if self.logon_var is not None:
-            self.logon_var.set(logon_enabled())
-
     def _do_configure(self):
         from tkinter import simpledialog, messagebox
         new = simpledialog.askstring(
@@ -512,17 +507,29 @@ class StatusPanel:
                 action_configure_apply(new)
         threading.Thread(target=refresh_once, daemon=True).start()
 
-    def _do_quit(self):
-        state.stop.set()
-        try:
-            if state.icon is not None:
-                state.icon.stop()
-        except Exception:
-            pass
-        try:
-            self.root.quit()
-        except Exception:
-            pass
+    def notify_update(self, kind, latest=None, manual=False, err=None):
+        """Thread-safe: report an update-check result to the user."""
+        if self.root is not None:
+            self.root.after(0, lambda: self._notify_update(kind, latest, manual, err))
+        elif kind == "available" and state.icon is not None:
+            try:
+                state.icon.notify("Update available: %s" % latest, APP_NAME)
+            except Exception:
+                pass
+
+    def _notify_update(self, kind, latest, manual, err):
+        from tkinter import messagebox
+        if kind == "available":
+            if messagebox.askyesno(
+                    APP_NAME,
+                    "A newer version is available.\n\n"
+                    "Installed:  v%s\nLatest:     %s\n\n"
+                    "Open the download page?" % (APP_VERSION, latest)):
+                webbrowser.open(RELEASES_URL)
+        elif kind == "uptodate" and manual:
+            messagebox.showinfo(APP_NAME, "You're up to date (v%s)." % APP_VERSION)
+        elif kind == "error" and manual:
+            messagebox.showerror(APP_NAME, "Update check failed:\n%s" % err)
 
     def _update(self):
         if self.win is None:
@@ -537,8 +544,6 @@ class StatusPanel:
         self.rows["server"].configure(text=state.server)
         self.rows["source"].configure(text=state.source)
         self.rows["lastsync"].configure(text=state.lastsync_txt)
-        if self.logon_var is not None:
-            self.logon_var.set(logon_enabled())
 
 
 panel = StatusPanel()
@@ -548,11 +553,65 @@ def on_show_panel(icon, item):
     panel.show()
 
 
+def _version_tuple(s):
+    out = []
+    for part in s.lstrip("vV").strip().split("."):
+        digits = ""
+        for ch in part:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def check_updates(manual=False):
+    """Query GitHub for the latest release tag; report via the panel. Runs in a thread."""
+    import urllib.request
+    import json
+    try:
+        req = urllib.request.Request(API_LATEST, headers={"User-Agent": APP_NAME})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            latest = json.load(resp).get("tag_name", "")
+    except Exception as e:
+        panel.notify_update("error", err=str(e), manual=manual)
+        return
+    if latest and _version_tuple(latest) > _version_tuple(APP_VERSION):
+        panel.notify_update("available", latest=latest, manual=manual)
+    else:
+        panel.notify_update("uptodate", manual=manual)
+
+
+def _startup_autocheck():
+    if not state.stop.wait(3):          # small delay; skip if quitting
+        check_updates(manual=False)
+
+
+def on_check_updates(icon, item):
+    threading.Thread(target=lambda: check_updates(manual=True), daemon=True).start()
+
+
+def on_toggle_autocheck(icon, item):
+    state.cfg["auto_check_updates"] = not state.cfg.get("auto_check_updates", False)
+    save_config(state.cfg)
+
+
+def on_toggle_logon(icon, item):
+    set_logon(not logon_enabled())
+
+
 def build_menu():
     # Everything lives in the panel now; the native right-click menu is a minimal
     # fallback (left-click opens the panel via the default item).
     return pystray.Menu(
         pystray.MenuItem("Open NTP Time Sync", on_show_panel, default=True),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Start at logon", on_toggle_logon,
+                         checked=lambda item: logon_enabled()),
+        pystray.MenuItem("Check for updates", on_check_updates),
+        pystray.MenuItem("Auto-check on startup", on_toggle_autocheck,
+                         checked=lambda item: state.cfg.get("auto_check_updates", False)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", on_quit),
     )
@@ -560,10 +619,16 @@ def build_menu():
 
 def main():
     panel.start()
+    if not state.cfg.get("logon_initialized", False):
+        set_logon(True)                       # default Start-at-logon ON, first run only
+        state.cfg["logon_initialized"] = True
+        save_config(state.cfg)
     state.icon = pystray.Icon(
         "ntp_time_sync", make_icon("gray"),
         "%s\nstarting..." % APP_NAME, build_menu())
     threading.Thread(target=poll_loop, daemon=True).start()
+    if state.cfg.get("auto_check_updates", False):
+        threading.Thread(target=_startup_autocheck, daemon=True).start()
     state.icon.run()
 
 

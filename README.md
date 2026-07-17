@@ -23,7 +23,7 @@ A single self-contained executable — **no Python, no installer, no dependencie
 3. **Windows SmartScreen** may say *"Windows protected your PC"* because the app isn't
    code-signed. Click **More info → Run anyway**. It's open source; every line is in this repo.
 4. On **Windows 11**, do the one-time step in [Make the icon visible](#make-the-icon-visible-windows-11) below.
-5. Left-click the dot to open the panel, then tick **Start at logon** to launch it automatically at boot.
+5. **Start at logon** is on by default; change it (and update checks) from the right-click menu.
 
 First run creates its settings at `%APPDATA%\NTP Time Sync\config.json`.
 
@@ -61,11 +61,13 @@ header over the live readout, with every action one click away:
 - **Resync (admin)** — `w32tm /resync /force`; opens an elevated PowerShell (UAC)
 - **Configure… (admin)** — change the NTP server, then applies it elevated (UAC)
 - **Open time.is** — browser sanity check
-- **Start at logon** — per-user autostart toggle (HKCU `Run`, no admin)
-- **Quit**
+- **Close**
 
-Right-click gives a minimal fallback menu (Open / Quit). Polling is read-only and
-runs **non-elevated**; only Resync and Configure raise a UAC prompt on demand.
+**Right-click** the dot for the rest: **Start at logon** (on by default),
+**Check for updates**, **Auto-check on startup** (off by default), and **Quit**.
+
+Polling is read-only and runs **non-elevated**; only Resync and Configure raise
+a UAC prompt on demand.
 
 ## Run from source (developers)
 
