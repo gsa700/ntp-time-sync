@@ -16,7 +16,7 @@ no numbers to read — just a dot by the clock.
 
 A single self-contained executable — **no Python, no installer, no dependencies.**
 
-**⬇ [Download the latest `NTP Time Sync.exe`](https://github.com/gsa700/ntp-time-sync/releases/latest)**
+**⬇ [Download the latest `NTP-Time-Sync.exe`](https://github.com/gsa700/ntp-time-sync/releases/latest)**
 
 1. Download the `.exe` from the latest release and drop it anywhere (Desktop, a tools folder…).
 2. Double-click it — a colored dot appears in the system tray.
