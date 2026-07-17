@@ -43,10 +43,15 @@ One-time and per-app; it sticks afterward. (Windows 10 shows the icon automatica
 
 | Color  | Meaning |
 |--------|---------|
-| 🟢 Green  | Synced to the configured server and \|offset\| < 1 s |
-| 🟡 Yellow | Synced but drifting (1–2 s) or last sync is stale (> 40 min) |
-| 🔴 Red    | Wrong source, not synced, offset > 2 s, or server unreachable |
+| 🟢 Green  | Clock accurate — \|offset\| < 1 s vs. the reference server |
+| 🟡 Yellow | Drifting (1–2 s), not NTP-synced (on the free-running CMOS clock), or last sync stale (> 40 min) |
+| 🔴 Red    | \|offset\| > 2 s, or the reference server is unreachable |
 | ⚪ Gray   | Starting up / probe error |
+
+The light follows your **clock's actual accuracy** (the measured offset), so it works
+no matter which NTP server Windows itself uses — you don't have to match the server
+below. It separately flags the case that started this project: Windows silently
+falling back to the free-running CMOS clock.
 
 Hover the icon for a one-line summary; **left-click** to open the panel.
 
@@ -124,16 +129,22 @@ defaults:
   "green_max_offset": 1.0,
   "yellow_max_offset": 2.0,
   "stale_minutes": 40,
-  "auto_check_updates": false
+  "auto_check_updates": false,
+  "require_server": false
 }
 ```
 
-- **server** — any NTP host or IP. Public pool by default; point it at a LAN
-  time server if you run one (e.g. `192.0.2.10` or a GPS-disciplined NTP box).
+- **server** — the **reference** the app measures your clock offset against. Any NTP
+  host or IP; public pool by default. Point it at a LAN time server if you run one
+  (e.g. `192.0.2.10` or a GPS-disciplined NTP box).
 - **green_max_offset / yellow_max_offset** — thresholds in seconds.
 - **poll_seconds** — how often to probe.
 - **stale_minutes** — if the last successful sync is older than this, don't show green.
 - **auto_check_updates** — check GitHub for a newer release at startup (toggle from the menu).
+- **require_server** — if `true`, also warn (yellow) unless Windows is syncing to this
+  exact server. Off by default (the light follows your clock's accuracy regardless of
+  which server Windows uses). Turn it on if you run a dedicated source and want to be
+  told when Windows isn't using it.
 
 The file also stores an internal `logon_initialized` flag (managed automatically — leave it).
 

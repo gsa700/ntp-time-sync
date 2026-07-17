@@ -46,7 +46,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -75,6 +75,7 @@ DEFAULTS = {
     "stale_minutes": 40,        # last sync older than this -> not green
     "auto_check_updates": False,  # check GitHub for a newer release at startup
     "logon_initialized": False,   # first run enables Start-at-logon by default
+    "require_server": False,      # if True, warn unless Windows syncs to this exact server
 }
 
 # --------------------------------------------------------------- config io
@@ -157,12 +158,20 @@ def probe_offset(server):
 # --------------------------------------------------------------- evaluation
 
 def evaluate(cfg):
-    """Return a dict of display fields + the traffic-light color."""
+    """Return a dict of display fields + the traffic-light color.
+
+    The light is driven by the measured clock offset (real accuracy) against the
+    configured reference server, so it works no matter which NTP server Windows
+    itself uses. A source that has fallen back to the free-running CMOS clock is
+    flagged even when the offset still looks OK. Requiring Windows to sync to
+    this exact server is opt-in via cfg["require_server"].
+    """
     st = query_status()
     server = cfg["server"]
     offset, reachable = probe_offset(server)
     source = st["source"] or ""
-    source_ok = bool(server) and server in source
+    low = source.lower()
+    not_ntp = (not source) or ("cmos" in low) or ("free-running" in low)
 
     age_min = None
     if st["last_sync"] is not None:
@@ -173,18 +182,21 @@ def evaluate(cfg):
 
     if not reachable or offset is None:
         color, reason = "red", "%s unreachable" % server
-    elif not source_ok:
-        color = "red"
-        reason = "source is %s, not %s" % (source or "none", server)
     else:
         a = abs(offset)
-        if a <= cfg["green_max_offset"] and not stale:
-            color, reason = "green", "healthy"
-        elif a <= cfg["yellow_max_offset"] or stale:
-            color = "yellow"
-            reason = "drifting" if a > cfg["green_max_offset"] else "sync stale"
-        else:
+        wrong = cfg.get("require_server", False) and bool(server) and server not in source
+        if a >= cfg["yellow_max_offset"]:
             color, reason = "red", "offset %+.3f s" % offset
+        elif not_ntp:
+            color, reason = "yellow", "not NTP-synced (CMOS clock)"
+        elif wrong:
+            color, reason = "yellow", "synced to %s, not %s" % (source, server)
+        elif a >= cfg["green_max_offset"]:
+            color, reason = "yellow", "drifting"
+        elif stale:
+            color, reason = "yellow", "sync stale"
+        else:
+            color, reason = "green", "healthy"
 
     offset_txt = ("%+.3f s" % offset) if offset is not None else "unreachable"
     if st["last_sync"]:
