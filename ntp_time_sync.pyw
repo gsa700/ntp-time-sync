@@ -46,8 +46,21 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+FROZEN = getattr(sys, "frozen", False)
+
+# When bundled to an .exe (PyInstaller), the program may live in a read-only
+# location (Program Files) and __file__ points into a temp extraction dir, so
+# keep config in %APPDATA%. When run as a script, keep it next to the script.
+if FROZEN:
+    CONFIG_DIR = os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
+else:
+    CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+try:
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+except OSError:
+    CONFIG_DIR = os.path.expanduser("~")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 CREATE_NO_WINDOW = 0x08000000
 
 DEFAULTS = {
@@ -232,9 +245,13 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE = "NtpTimeSync"
 
 
-def _pythonw_path():
-    cand = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-    return cand if os.path.exists(cand) else sys.executable
+def _logon_command():
+    """Command to relaunch at logon: the exe itself when frozen, else pythonw + script."""
+    if FROZEN:
+        return '"%s"' % sys.executable
+    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    exe = pyw if os.path.exists(pyw) else sys.executable
+    return '"%s" "%s"' % (exe, os.path.abspath(__file__))
 
 
 def logon_enabled():
@@ -249,7 +266,7 @@ def logon_enabled():
 
 def set_logon(enable):
     import winreg
-    cmd = '"%s" "%s"' % (_pythonw_path(), os.path.abspath(__file__))
+    cmd = _logon_command()
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
         if enable:
             winreg.SetValueEx(k, RUN_VALUE, 0, winreg.REG_SZ, cmd)

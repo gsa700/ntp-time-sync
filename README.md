@@ -12,6 +12,31 @@ no numbers to read — just a dot by the clock.
 > problem. This app makes that failure visible at a glance — but it's useful to
 > anyone who depends on an accurate Windows clock.
 
+## Download (recommended)
+
+A single self-contained executable — **no Python, no installer, no dependencies.**
+
+**⬇ [Download the latest `NTP Time Sync.exe`](https://github.com/gsa700/ntp-time-sync/releases/latest)**
+
+1. Download the `.exe` from the latest release and drop it anywhere (Desktop, a tools folder…).
+2. Double-click it — a colored dot appears in the system tray.
+3. **Windows SmartScreen** may say *"Windows protected your PC"* because the app isn't
+   code-signed. Click **More info → Run anyway**. It's open source; every line is in this repo.
+4. On **Windows 11**, do the one-time step in [Make the icon visible](#make-the-icon-visible-windows-11) below.
+5. Right-click the dot → **Start at logon** to launch it automatically at boot.
+
+First run creates its settings at `%APPDATA%\NTP Time Sync\config.json`.
+
+## Make the icon visible (Windows 11)
+
+Windows 11 **hides new tray icons by default** — the app is running, but the dot won't
+show on the taskbar until you allow it once:
+
+**Settings → Personalization → Taskbar → Other system tray icons →** turn the
+**NTP Time Sync** entry **On**.
+
+One-time and per-app; it sticks afterward. (Windows 10 shows the icon automatically.)
+
 ## The light
 
 | Color  | Meaning |
@@ -39,38 +64,33 @@ Polling is read-only and runs **non-elevated**. Only Resync and Configure need
 admin, so they raise a UAC prompt on demand instead of the whole app running
 elevated.
 
-## Install
+## Run from source (developers)
 
 Requires **Python 3.8+** on Windows.
 
 ```
 pip install -r requirements.txt
-```
-
-## Run
-
-Double-click `ntp_time_sync.pyw` (runs windowless via `pythonw`), or:
-
-```
 pythonw ntp_time_sync.pyw
 ```
 
-Enable **Start at logon** from the menu to have it come up automatically.
+Double-clicking `ntp_time_sync.pyw` also works (runs windowless via `pythonw`).
 
-### ⚠️ Windows 11: make the icon visible
+### Build the executable
 
-Windows 11 **hides new tray icons by default** — the app is running, but the dot
-won't appear on the taskbar until you allow it once:
+```
+pip install pyinstaller
+python make_ico.py
+python -m PyInstaller --onefile --windowed --name "NTP Time Sync" ^
+  --icon app.ico --hidden-import pystray._win32 ntp_time_sync.pyw
+```
 
-**Settings → Personalization → Taskbar → Other system tray icons →** turn
-**NTP Time Sync** (a `python`/`pythonw` entry) **On**.
-
-This is a one-time, per-app Windows setting; it sticks afterward. (Windows 10
-shows the icon automatically.)
+The bundled `NTP Time Sync.exe` lands in `dist/`.
 
 ## Configure
 
-`config.json` is created next to the script on first run. Defaults:
+Settings live in `config.json` — in `%APPDATA%\NTP Time Sync\` for the packaged
+`.exe`, or next to the script when run from source. Created on first run with these
+defaults:
 
 ```json
 {
@@ -102,8 +122,10 @@ already doing. The admin actions just wrap `w32tm /config` and `w32tm /resync`.
 
 ## Requirements
 
-- Windows (uses `w32tm` and the Win32 notification area)
-- Python 3.8+ with `pystray` and `Pillow`
+- **The `.exe`:** Windows 10/11 — nothing else; Python and all libraries are bundled.
+- **From source:** Python 3.8+ with `pystray` and `Pillow` (see `requirements.txt`).
+
+Uses the built-in `w32tm` and the Win32 notification area.
 
 ## Author
 

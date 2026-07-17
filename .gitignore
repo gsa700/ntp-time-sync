@@ -8,6 +8,11 @@ __pycache__/
 .venv/
 venv/
 
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
 # OS / editor
 Thumbs.db
 desktop.ini
