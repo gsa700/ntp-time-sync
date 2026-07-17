@@ -46,7 +46,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -630,7 +630,10 @@ def self_update(url):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
         with urllib.request.urlopen(req, timeout=120) as resp:
+            expected = resp.headers.get("Content-Length")
             data = resp.read()
+        if expected is not None and len(data) != int(expected):
+            raise ValueError("incomplete download: %d of %s bytes" % (len(data), expected))
         if len(data) < 1_000_000 or data[:2] != b"MZ":
             raise ValueError("downloaded file is not a valid executable")
         with open(new, "wb") as f:
@@ -659,12 +662,19 @@ def self_update(url):
     # Launching the exe directly from the dying process triggers a spurious
     # "failed to remove temporary directory" dialog on onefile builds.
     try:
+        pid = os.getpid()
         helper = os.path.join(folder, "relaunch.cmd")
         with open(helper, "w") as f:
             f.write('@echo off\r\n')
-            f.write('ping 127.0.0.1 -n 3 >nul\r\n')   # ~2s: let the old process exit
+            f.write(':waitpid\r\n')                    # wait for THIS process to fully exit
+            f.write('tasklist /fi "PID eq %d" 2>nul | find "%d" >nul\r\n' % (pid, pid))
+            f.write('if errorlevel 1 goto ready\r\n')
+            f.write('ping 127.0.0.1 -n 2 >nul\r\n')
+            f.write('goto waitpid\r\n')
+            f.write(':ready\r\n')
+            f.write('ping 127.0.0.1 -n 5 >nul\r\n')    # settle ~4s so AV finishes scanning the fresh exe
             f.write('start "" "%s"\r\n' % exe)
-            f.write('del "%~f0"\r\n')                 # helper removes itself
+            f.write('del "%~f0"\r\n')                  # helper removes itself
         subprocess.Popen(["cmd", "/c", helper], cwd=folder,
                          creationflags=0x00000008 | 0x08000000)  # DETACHED | NO_WINDOW
     except Exception:
