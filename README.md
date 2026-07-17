@@ -18,7 +18,9 @@ A single self-contained executable — **no Python, no installer, no dependencie
 
 **⬇ [Download the latest `NTP-Time-Sync.exe`](https://github.com/gsa700/ntp-time-sync/releases/latest)**
 
-1. Download the `.exe` from the latest release and drop it anywhere (Desktop, a tools folder…).
+1. Download the `.exe` and put it in a **stable, writable folder** — the recommended spot is
+   `%LOCALAPPDATA%\Programs\NTP Time Sync\` (create it if needed). A fixed location keeps
+   Start-at-logon and the tray-visibility setting working, and lets the app **update itself in place**.
 2. Double-click it — a colored dot appears in the system tray.
 3. **Windows SmartScreen** may say *"Windows protected your PC"* because the app isn't
    code-signed. Click **More info → Run anyway**. It's open source; every line is in this repo.
@@ -65,6 +67,11 @@ header over the live readout, with every action one click away:
 
 **Right-click** the dot for the rest: **Start at logon** (on by default),
 **Check for updates**, **Auto-check on startup** (off by default), and **Quit**.
+
+When a newer release exists, **Check for updates** offers to **download and install
+it in place, then restart** — no manual re-download. (Works because the app lives in
+a user-writable folder; no admin needed. Auto-check only *notifies* — installing is
+always a click.)
 
 Polling is read-only and runs **non-elevated**; only Resync and Configure raise
 a UAC prompt on demand.
@@ -116,7 +123,8 @@ defaults:
   "poll_seconds": 45,
   "green_max_offset": 1.0,
   "yellow_max_offset": 2.0,
-  "stale_minutes": 40
+  "stale_minutes": 40,
+  "auto_check_updates": false
 }
 ```
 
@@ -125,6 +133,9 @@ defaults:
 - **green_max_offset / yellow_max_offset** — thresholds in seconds.
 - **poll_seconds** — how often to probe.
 - **stale_minutes** — if the last successful sync is older than this, don't show green.
+- **auto_check_updates** — check GitHub for a newer release at startup (toggle from the menu).
+
+The file also stores an internal `logon_initialized` flag (managed automatically — leave it).
 
 Edit and restart, or use **Configure server…** to change the server from the UI.
 

@@ -46,7 +46,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -507,20 +507,28 @@ class StatusPanel:
                 action_configure_apply(new)
         threading.Thread(target=refresh_once, daemon=True).start()
 
-    def notify_update(self, kind, latest=None, manual=False, err=None):
+    def notify_update(self, kind, latest=None, url=None, manual=False, err=None):
         """Thread-safe: report an update-check result to the user."""
         if self.root is not None:
-            self.root.after(0, lambda: self._notify_update(kind, latest, manual, err))
+            self.root.after(0, lambda: self._notify_update(kind, latest, url, manual, err))
         elif kind == "available" and state.icon is not None:
             try:
                 state.icon.notify("Update available: %s" % latest, APP_NAME)
             except Exception:
                 pass
 
-    def _notify_update(self, kind, latest, manual, err):
+    def _notify_update(self, kind, latest, url, manual, err):
         from tkinter import messagebox
         if kind == "available":
-            if messagebox.askyesno(
+            if FROZEN and url:
+                if messagebox.askyesno(
+                        APP_NAME,
+                        "A newer version is available.\n\n"
+                        "Installed:  v%s\nLatest:     %s\n\n"
+                        "Download and install it now? The app will restart."
+                        % (APP_VERSION, latest)):
+                    threading.Thread(target=lambda: self_update(url), daemon=True).start()
+            elif messagebox.askyesno(
                     APP_NAME,
                     "A newer version is available.\n\n"
                     "Installed:  v%s\nLatest:     %s\n\n"
@@ -530,6 +538,12 @@ class StatusPanel:
             messagebox.showinfo(APP_NAME, "You're up to date (v%s)." % APP_VERSION)
         elif kind == "error" and manual:
             messagebox.showerror(APP_NAME, "Update check failed:\n%s" % err)
+        elif kind == "update_failed":
+            if messagebox.askyesno(
+                    APP_NAME,
+                    "Automatic update failed:\n%s\n\n"
+                    "Open the download page instead?" % err):
+                webbrowser.open(RELEASES_URL)
 
     def _update(self):
         if self.win is None:
@@ -567,20 +581,89 @@ def _version_tuple(s):
 
 
 def check_updates(manual=False):
-    """Query GitHub for the latest release tag; report via the panel. Runs in a thread."""
+    """Query GitHub for the latest release; report via the panel. Runs in a thread."""
     import urllib.request
     import json
     try:
         req = urllib.request.Request(API_LATEST, headers={"User-Agent": APP_NAME})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            latest = json.load(resp).get("tag_name", "")
+            data = json.load(resp)
     except Exception as e:
         panel.notify_update("error", err=str(e), manual=manual)
         return
+    latest = data.get("tag_name", "")
+    url = None
+    for asset in data.get("assets", []):
+        if asset.get("name", "").lower().endswith(".exe"):
+            url = asset.get("browser_download_url")
+            break
     if latest and _version_tuple(latest) > _version_tuple(APP_VERSION):
-        panel.notify_update("available", latest=latest, manual=manual)
+        panel.notify_update("available", latest=latest, url=url, manual=manual)
     else:
         panel.notify_update("uptodate", manual=manual)
+
+
+def self_update(url):
+    """Download the new exe, swap it into place, and relaunch. Frozen builds only.
+
+    Windows lets you rename a running .exe (just not overwrite it), so we rename
+    the current exe aside, drop the freshly-downloaded one into its place, launch
+    it, and quit. The leftover .old.exe is cleaned up on next startup.
+    """
+    import urllib.request
+    exe = sys.executable
+    folder = os.path.dirname(exe)
+    new = os.path.join(folder, "update.download.exe")
+    old = os.path.join(folder, "update.old.exe")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = resp.read()
+        if len(data) < 1_000_000 or data[:2] != b"MZ":
+            raise ValueError("downloaded file is not a valid executable")
+        with open(new, "wb") as f:
+            f.write(data)
+        if os.path.exists(old):
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+        os.replace(exe, old)      # rename running exe aside (allowed on Windows)
+        try:
+            os.replace(new, exe)  # move new exe into the original path
+        except Exception:
+            os.replace(old, exe)  # restore original if the swap fails
+            raise
+    except Exception as e:
+        try:
+            if os.path.exists(new):
+                os.remove(new)
+        except OSError:
+            pass
+        panel.notify_update("update_failed", err=str(e))
+        return
+    try:
+        subprocess.Popen([exe])
+    except Exception:
+        pass
+    state.stop.set()
+    if state.icon is not None:
+        state.icon.stop()
+    panel.close()
+
+
+def _cleanup_old_update():
+    """Remove leftovers from a previous self-update."""
+    if not FROZEN:
+        return
+    folder = os.path.dirname(sys.executable)
+    for name in ("update.old.exe", "update.download.exe"):
+        p = os.path.join(folder, name)
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
 
 
 def _startup_autocheck():
@@ -618,6 +701,7 @@ def build_menu():
 
 
 def main():
+    _cleanup_old_update()
     panel.start()
     if not state.cfg.get("logon_initialized", False):
         set_logon(True)                       # default Start-at-logon ON, first run only
