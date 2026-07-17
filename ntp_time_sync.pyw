@@ -46,7 +46,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -642,10 +642,24 @@ def self_update(url):
             pass
         panel.notify_update("update_failed", err=str(e))
         return
+    # Relaunch via a tiny detached helper so THIS process fully exits (and lets
+    # PyInstaller remove its onefile temp dir) before the new instance starts.
+    # Launching the exe directly from the dying process triggers a spurious
+    # "failed to remove temporary directory" dialog on onefile builds.
     try:
-        subprocess.Popen([exe])
+        helper = os.path.join(folder, "relaunch.cmd")
+        with open(helper, "w") as f:
+            f.write('@echo off\r\n')
+            f.write('ping 127.0.0.1 -n 3 >nul\r\n')   # ~2s: let the old process exit
+            f.write('start "" "%s"\r\n' % exe)
+            f.write('del "%~f0"\r\n')                 # helper removes itself
+        subprocess.Popen(["cmd", "/c", helper], cwd=folder,
+                         creationflags=0x00000008 | 0x08000000)  # DETACHED | NO_WINDOW
     except Exception:
-        pass
+        try:
+            subprocess.Popen([exe], cwd=folder)
+        except Exception:
+            pass
     state.stop.set()
     if state.icon is not None:
         state.icon.stop()
@@ -657,7 +671,7 @@ def _cleanup_old_update():
     if not FROZEN:
         return
     folder = os.path.dirname(sys.executable)
-    for name in ("update.old.exe", "update.download.exe"):
+    for name in ("update.old.exe", "update.download.exe", "relaunch.cmd"):
         p = os.path.join(folder, name)
         try:
             if os.path.exists(p):
