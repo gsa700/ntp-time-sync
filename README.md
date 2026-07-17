@@ -25,6 +25,8 @@ Hover the icon for a one-line summary; right-click for the full readout and acti
 
 ## Right-click menu
 
+<img src="docs/menu.png" alt="NTP Time Sync right-click menu" width="320">
+
 - **Status readout** — color/reason, offset, server, source, last sync (live)
 - **Refresh now** — re-probe immediately (also the double-click default)
 - **Resync clock (admin)** — `w32tm /resync /force`; opens an elevated PowerShell (UAC)
