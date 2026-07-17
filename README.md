@@ -78,16 +78,29 @@ pythonw ntp_time_sync.pyw
 
 Double-clicking `ntp_time_sync.pyw` also works (runs windowless via `pythonw`).
 
-### Build the executable
+### Build & update your install
+
+One command rebuilds the exe and updates your installed copy (stops it,
+overwrites `%LOCALAPPDATA%\Programs\NTP Time Sync\`, relaunches). Settings in
+`%APPDATA%` are preserved:
 
 ```
-pip install pyinstaller
-python make_ico.py
-python -m PyInstaller --onefile --windowed --name "NTP Time Sync" ^
-  --icon app.ico --hidden-import pystray._win32 ntp_time_sync.pyw
+.\build.ps1              # build + update your install
+.\build.ps1 -NoDeploy    # just build into dist\
 ```
 
-The bundled `NTP Time Sync.exe` lands in `dist/`.
+First-time build deps: `pip install pyinstaller`.
+
+### Cut a release (for sharing)
+
+After `.\build.ps1 -NoDeploy`, publish the exe so others can download it:
+
+```
+Copy-Item "dist\NTP Time Sync.exe" "dist\NTP-Time-Sync.exe" -Force
+gh release create vX.Y.Z "dist\NTP-Time-Sync.exe" --title "NTP Time Sync vX.Y.Z" --notes "..."
+```
+
+`README` links to `/releases/latest`, so it always points at the newest.
 
 ## Configure
 
