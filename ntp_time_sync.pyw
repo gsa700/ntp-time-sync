@@ -361,16 +361,16 @@ def on_quit(icon, item):
 
 def build_menu():
     return pystray.Menu(
-        pystray.MenuItem(lambda item: "* %s: %s" % (state.color.upper(), state.reason),
-                         None, enabled=False),
+        pystray.MenuItem(lambda item: "●  %s: %s" % (state.color.upper(), state.reason),
+                         on_refresh),
         pystray.MenuItem(lambda item: "   Offset: %s" % state.offset_txt,
-                         None, enabled=False),
+                         on_refresh),
         pystray.MenuItem(lambda item: "   Server: %s" % state.server,
-                         None, enabled=False),
+                         on_refresh),
         pystray.MenuItem(lambda item: "   Source: %s" % state.source,
-                         None, enabled=False),
+                         on_refresh),
         pystray.MenuItem(lambda item: "   Last sync: %s" % state.lastsync_txt,
-                         None, enabled=False),
+                         on_refresh),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Refresh now", on_refresh, default=True),
         pystray.MenuItem("Resync clock  (admin)", on_resync),
