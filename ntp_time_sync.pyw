@@ -316,6 +316,10 @@ def refresh_once():
         state.icon.icon = make_icon(state.color)
         state.icon.title = state.tooltip()
         state.icon.update_menu()
+    try:
+        panel.refresh()
+    except Exception:
+        pass
 
 
 def poll_loop():
@@ -326,82 +330,236 @@ def poll_loop():
 
 # --------------------------------------------------------------- menu handlers
 
-def on_refresh(icon, item):
-    threading.Thread(target=refresh_once, daemon=True).start()
-
-
-def on_resync(icon, item):
-    action_resync()
-
-
-def on_configure(icon, item):
-    threading.Thread(target=_configure_dialog, daemon=True).start()
-
-
-def _configure_dialog():
-    import tkinter as tk
-    from tkinter import simpledialog, messagebox
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    new = simpledialog.askstring(
-        APP_NAME, "NTP server (IP or hostname):",
-        initialvalue=state.cfg["server"], parent=root)
-    if new:
-        new = new.strip()
-        if new != state.cfg["server"]:
-            state.cfg["server"] = new
-            save_config(state.cfg)
-            state.server = new
-        if messagebox.askyesno(
-                APP_NAME,
-                "Point Windows time service at %s now?\n\n"
-                "Needs administrator rights - a UAC prompt will appear." % new,
-                parent=root):
-            action_configure_apply(new)
-    root.destroy()
-    threading.Thread(target=refresh_once, daemon=True).start()
-
-
-def on_timeis(icon, item):
-    webbrowser.open("https://time.is")
-
-
-def on_toggle_logon(icon, item):
-    set_logon(not logon_enabled())
-
-
 def on_quit(icon, item):
     state.stop.set()
+    if panel is not None:
+        panel.close()
     icon.stop()
 
 
+# --------------------------------------------------------------- status panel
+
+class StatusPanel:
+    """Borderless popup with a solid status-colored header + live readout.
+
+    Runs its own Tk root on a dedicated thread; every Tk call is marshaled onto
+    that thread with root.after(), so pystray's thread never touches Tk directly.
+    """
+
+    BODY_BG = "#f7f7f7"
+    LABEL_FG = "#555555"
+    VALUE_FG = "#1a1a1a"
+    BORDER = "#c8c8c8"
+
+    def __init__(self):
+        self.root = None
+        self.win = None
+        self.hdr = None
+        self.hdr_lbl = None
+        self.rows = {}
+        self.logon_var = None
+        self._ready = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True).start()
+        self._ready.wait(5)
+
+    def _run(self):
+        try:
+            import tkinter as tk
+            self.root = tk.Tk()
+            self.root.withdraw()
+        except Exception:
+            self.root = None
+        finally:
+            self._ready.set()
+        if self.root is not None:
+            self.root.mainloop()
+
+    # ---- thread-safe entry points ----
+    def show(self):
+        if self.root is not None:
+            self.root.after(0, self._show)
+
+    def refresh(self):
+        if self.root is not None and self.win is not None:
+            self.root.after(0, self._update)
+
+    def close(self):
+        if self.root is not None:
+            try:
+                self.root.after(0, self.root.quit)
+            except Exception:
+                pass
+
+    # ---- Tk-thread internals ----
+    def _hexcolor(self, color):
+        return "#%02x%02x%02x" % _ICON_COLORS.get(color, _ICON_COLORS["gray"])
+
+    def _build(self):
+        import tkinter as tk
+        self.win = tk.Toplevel(self.root)
+        self.win.overrideredirect(True)
+        self.win.configure(bg=self.BORDER)
+        outer = tk.Frame(self.win, bg=self.BORDER)
+        outer.pack(fill="both", expand=True, padx=1, pady=1)
+
+        self.hdr = tk.Frame(outer, bg="#888888")
+        self.hdr.pack(fill="x")
+        self.hdr_lbl = tk.Label(self.hdr, text="", font=("Segoe UI", 13, "bold"),
+                                bg="#888888", fg="#ffffff", anchor="w", padx=14, pady=10)
+        self.hdr_lbl.pack(fill="x")
+
+        body = tk.Frame(outer, bg=self.BODY_BG)
+        body.pack(fill="both", expand=True)
+        for key, label in (("offset", "Offset"), ("server", "Server"),
+                           ("source", "Source"), ("lastsync", "Last sync")):
+            row = tk.Frame(body, bg=self.BODY_BG)
+            row.pack(fill="x", padx=14, pady=2)
+            tk.Label(row, text=label + ":", width=9, anchor="w", font=("Segoe UI", 10),
+                     bg=self.BODY_BG, fg=self.LABEL_FG).pack(side="left")
+            v = tk.Label(row, text="", anchor="w", font=("Segoe UI", 10),
+                         bg=self.BODY_BG, fg=self.VALUE_FG)
+            v.pack(side="left", fill="x", expand=True)
+            self.rows[key] = v
+
+        tk.Frame(body, bg=self.BORDER, height=1).pack(fill="x", padx=12, pady=(8, 6))
+
+        r1 = tk.Frame(body, bg=self.BODY_BG)
+        r1.pack(fill="x", padx=10, pady=2)
+        tk.Button(r1, text="Refresh", width=12,
+                  command=lambda: threading.Thread(target=refresh_once, daemon=True).start()
+                  ).pack(side="left", padx=3)
+        tk.Button(r1, text="Resync  (admin)", width=16,
+                  command=self._do_resync).pack(side="left", padx=3)
+
+        r2 = tk.Frame(body, bg=self.BODY_BG)
+        r2.pack(fill="x", padx=10, pady=2)
+        tk.Button(r2, text="Configure…  (admin)", width=16,
+                  command=self._do_configure).pack(side="left", padx=3)
+        tk.Button(r2, text="Open time.is", width=12,
+                  command=self._do_timeis).pack(side="left", padx=3)
+
+        r3 = tk.Frame(body, bg=self.BODY_BG)
+        r3.pack(fill="x", padx=12, pady=(6, 10))
+        self.logon_var = tk.BooleanVar(master=self.root, value=logon_enabled())
+        tk.Checkbutton(r3, text="Start at logon", variable=self.logon_var,
+                       command=self._toggle_logon, bg=self.BODY_BG, fg=self.VALUE_FG,
+                       activebackground=self.BODY_BG, activeforeground=self.VALUE_FG,
+                       selectcolor="#ffffff", font=("Segoe UI", 10)).pack(side="left")
+        tk.Button(r3, text="Quit", width=8, command=self._do_quit).pack(side="right", padx=3)
+        tk.Button(r3, text="Close", width=8, command=self._hide).pack(side="right", padx=3)
+
+        self.win.bind("<FocusOut>", self._on_focus_out)
+        self.win.bind("<Escape>", lambda e: self._hide())
+
+    def _show(self):
+        if self.win is None:
+            self._build()
+        self._update()
+        self.win.update_idletasks()
+        w, h = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
+        sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
+        self.win.geometry("%dx%d+%d+%d" % (w, h, sw - w - 12, sh - h - 60))
+        self.win.deiconify()
+        self.win.lift()
+        self.win.attributes("-topmost", True)
+        self.win.focus_force()
+
+    def _hide(self):
+        if self.win is not None:
+            self.win.withdraw()
+
+    def _on_focus_out(self, _event):
+        # Defer, then hide only if focus left the whole app (not an internal widget).
+        self.win.after(120, self._maybe_hide)
+
+    def _maybe_hide(self):
+        try:
+            focused = self.root.focus_get()
+        except Exception:
+            focused = None
+        if focused is None:
+            self._hide()
+
+    def _do_resync(self):
+        action_resync()
+
+    def _do_timeis(self):
+        webbrowser.open("https://time.is")
+
+    def _toggle_logon(self):
+        set_logon(not logon_enabled())
+        if self.logon_var is not None:
+            self.logon_var.set(logon_enabled())
+
+    def _do_configure(self):
+        from tkinter import simpledialog, messagebox
+        new = simpledialog.askstring(
+            APP_NAME, "NTP server (IP or hostname):",
+            initialvalue=state.cfg["server"], parent=self.win)
+        if new:
+            new = new.strip()
+            if new != state.cfg["server"]:
+                state.cfg["server"] = new
+                save_config(state.cfg)
+                state.server = new
+            if messagebox.askyesno(
+                    APP_NAME,
+                    "Point Windows time service at %s now?\n\n"
+                    "Needs administrator rights - a UAC prompt will appear." % new,
+                    parent=self.win):
+                action_configure_apply(new)
+        threading.Thread(target=refresh_once, daemon=True).start()
+
+    def _do_quit(self):
+        state.stop.set()
+        try:
+            if state.icon is not None:
+                state.icon.stop()
+        except Exception:
+            pass
+        try:
+            self.root.quit()
+        except Exception:
+            pass
+
+    def _update(self):
+        if self.win is None:
+            return
+        color = state.color
+        hexc = self._hexcolor(color)
+        fg = "#1a1a1a" if color in ("yellow", "gray") else "#ffffff"
+        self.hdr.configure(bg=hexc)
+        self.hdr_lbl.configure(bg=hexc, fg=fg,
+                               text="%s  —  %s" % (color.upper(), state.reason))
+        self.rows["offset"].configure(text=state.offset_txt)
+        self.rows["server"].configure(text=state.server)
+        self.rows["source"].configure(text=state.source)
+        self.rows["lastsync"].configure(text=state.lastsync_txt)
+        if self.logon_var is not None:
+            self.logon_var.set(logon_enabled())
+
+
+panel = StatusPanel()
+
+
+def on_show_panel(icon, item):
+    panel.show()
+
+
 def build_menu():
+    # Everything lives in the panel now; the native right-click menu is a minimal
+    # fallback (left-click opens the panel via the default item).
     return pystray.Menu(
-        pystray.MenuItem(lambda item: "●  %s: %s" % (state.color.upper(), state.reason),
-                         on_refresh),
-        pystray.MenuItem(lambda item: "   Offset: %s" % state.offset_txt,
-                         on_refresh),
-        pystray.MenuItem(lambda item: "   Server: %s" % state.server,
-                         on_refresh),
-        pystray.MenuItem(lambda item: "   Source: %s" % state.source,
-                         on_refresh),
-        pystray.MenuItem(lambda item: "   Last sync: %s" % state.lastsync_txt,
-                         on_refresh),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Refresh now", on_refresh, default=True),
-        pystray.MenuItem("Resync clock  (admin)", on_resync),
-        pystray.MenuItem("Configure server...  (admin)", on_configure),
-        pystray.MenuItem("Open time.is", on_timeis),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Start at logon", on_toggle_logon,
-                         checked=lambda item: logon_enabled()),
+        pystray.MenuItem("Open NTP Time Sync", on_show_panel, default=True),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", on_quit),
     )
 
 
 def main():
+    panel.start()
     state.icon = pystray.Icon(
         "ntp_time_sync", make_icon("gray"),
         "%s\nstarting..." % APP_NAME, build_menu())
