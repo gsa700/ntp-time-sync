@@ -4,6 +4,8 @@ A tiny Windows system-tray light for **Windows Time (w32time) sync health**.
 Green means your PC clock is accurate; red means it isn't. No dialog to open,
 no numbers to read — just a dot by the clock.
 
+![NTP Time Sync status lights](docs/lights.png)
+
 > **Why it exists:** FT8/FT4 digital modes (WSJT-X and friends) need the PC
 > clock within about **1 second of UTC** or *nothing decodes*, even with strong
 > signals in the waterfall. "Signals but no decodes" is almost always a clock
@@ -107,4 +109,4 @@ David Erickson (AB0R). Contributions and issues welcome.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPLv3 — see [LICENSE](LICENSE). Copyright (C) 2026 David Erickson (AB0R).
