@@ -1,0 +1,15 @@
+# Runtime config (user-specific; created on first run)
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
