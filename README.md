@@ -74,9 +74,9 @@ header over the live readout, with every action one click away:
 **Check for updates**, **Auto-check on startup** (off by default), and **Quit**.
 
 When a newer release exists, **Check for updates** offers to **download and install
-it in place, then restart** — no manual re-download. (Works because the app lives in
-a user-writable folder; no admin needed. Auto-check only *notifies* — installing is
-always a click.)
+it in place**, then closes — reopen it (or wait for your next sign-in, since it starts
+at logon) to finish on the new version. No manual re-download; no admin needed. Auto-check
+only *notifies* — installing is always a click.
 
 Polling is read-only and runs **non-elevated**; only Resync and Configure raise
 a UAC prompt on demand.

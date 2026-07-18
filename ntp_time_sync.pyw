@@ -46,7 +46,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -537,9 +537,10 @@ class StatusPanel:
                         APP_NAME,
                         "A newer version is available.\n\n"
                         "Installed:  v%s\nLatest:     %s\n\n"
-                        "Download and install it now? The app will restart."
+                        "Download and install it now?"
                         % (APP_VERSION, latest)):
-                    threading.Thread(target=lambda: self_update(url), daemon=True).start()
+                    threading.Thread(target=lambda: self_update(url, latest),
+                                     daemon=True).start()
             elif messagebox.askyesno(
                     APP_NAME,
                     "A newer version is available.\n\n"
@@ -550,6 +551,16 @@ class StatusPanel:
             messagebox.showinfo(APP_NAME, "You're up to date (v%s)." % APP_VERSION)
         elif kind == "error" and manual:
             messagebox.showerror(APP_NAME, "Update check failed:\n%s" % err)
+        elif kind == "installed":
+            messagebox.showinfo(
+                APP_NAME,
+                "Update installed (%s).\n\n"
+                "NTP Time Sync will now close — reopen it to finish.\n"
+                "(It also starts automatically at your next sign-in.)" % latest)
+            state.stop.set()
+            if state.icon is not None:
+                state.icon.stop()
+            self.close()
         elif kind == "update_failed":
             if messagebox.askyesno(
                     APP_NAME,
@@ -615,12 +626,17 @@ def check_updates(manual=False):
         panel.notify_update("uptodate", manual=manual)
 
 
-def self_update(url):
-    """Download the new exe, swap it into place, and relaunch. Frozen builds only.
+def self_update(url, latest):
+    """Download the new exe and swap it into place. Frozen builds only.
 
     Windows lets you rename a running .exe (just not overwrite it), so we rename
-    the current exe aside, drop the freshly-downloaded one into its place, launch
-    it, and quit. The leftover .old.exe is cleaned up on next startup.
+    the current exe aside and drop the freshly-downloaded one into its place.
+
+    We deliberately do NOT auto-relaunch. Launching a just-written onefile exe
+    races with antivirus scanning it, which reliably produces "failed to load
+    Python DLL" errors. Instead we tell the user the update is installed and to
+    reopen — and the app starts at logon anyway. The leftover .old.exe is cleaned
+    up on next startup.
     """
     import urllib.request
     exe = sys.executable
@@ -657,28 +673,7 @@ def self_update(url):
             pass
         panel.notify_update("update_failed", err=str(e))
         return
-    # Relaunch via a tiny detached helper so THIS process fully exits (and lets
-    # PyInstaller remove its onefile temp dir) before the new instance starts.
-    # Launching the exe directly from the dying process triggers a spurious
-    # "failed to remove temporary directory" dialog on onefile builds.
-    # Relaunch via a hidden PowerShell: Wait-Process reliably blocks until THIS
-    # process exits (so the onefile temp dir is cleaned up first), then a short
-    # settle lets antivirus finish scanning the fresh exe before Start-Process
-    # launches it. Far more robust than a batch tasklist loop.
-    try:
-        ps = ("$ErrorActionPreference='SilentlyContinue';"
-              "Wait-Process -Id %d -Timeout 30;"
-              "Start-Sleep -Seconds 3;"
-              "Start-Process -FilePath '%s'") % (os.getpid(), exe)
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
-            creationflags=0x08000000)  # CREATE_NO_WINDOW
-    except Exception:
-        pass
-    state.stop.set()
-    if state.icon is not None:
-        state.icon.stop()
-    panel.close()
+    panel.notify_update("installed", latest=latest)
 
 
 def _cleanup_old_update():
