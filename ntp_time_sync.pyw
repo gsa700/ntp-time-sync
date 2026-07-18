@@ -46,7 +46,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.3.10"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -552,11 +552,14 @@ class StatusPanel:
         elif kind == "error" and manual:
             messagebox.showerror(APP_NAME, "Update check failed:\n%s" % err)
         elif kind == "installed":
-            messagebox.showinfo(
+            restart = messagebox.askyesno(
                 APP_NAME,
                 "Update installed (%s).\n\n"
-                "NTP Time Sync will now close — reopen it to finish.\n"
-                "(It also starts automatically at your next sign-in.)" % latest)
+                "Restart NTP Time Sync now to finish?\n"
+                "(Choose No to finish later — it also starts at your next sign-in.)"
+                % latest)
+            if restart:
+                _relaunch()
             state.stop.set()
             if state.icon is not None:
                 state.icon.stop()
@@ -632,11 +635,11 @@ def self_update(url, latest):
     Windows lets you rename a running .exe (just not overwrite it), so we rename
     the current exe aside and drop the freshly-downloaded one into its place.
 
-    We deliberately do NOT auto-relaunch. Launching a just-written onefile exe
-    races with antivirus scanning it, which reliably produces "failed to load
-    Python DLL" errors. Instead we tell the user the update is installed and to
-    reopen — and the app starts at logon anyway. The leftover .old.exe is cleaned
-    up on next startup.
+    We do NOT relaunch here. Launching a just-written onefile exe races with
+    antivirus scanning it, which reliably produces "failed to load Python DLL".
+    On success we report "installed" and let the user opt into a restart (see
+    _relaunch, which forces the AV scan to finish first). The app also starts at
+    logon. The leftover .old.exe is cleaned up on next startup.
     """
     import urllib.request
     exe = sys.executable
@@ -674,6 +677,27 @@ def self_update(url, latest):
         panel.notify_update("update_failed", err=str(e))
         return
     panel.notify_update("installed", latest=latest)
+
+
+def _relaunch():
+    """Robustly relaunch the freshly-updated exe (only when the user opts in).
+
+    Waits for THIS process to exit (so the onefile temp dir is cleaned up), then
+    reads the new exe end-to-end so antivirus finishes scanning it BEFORE launch
+    (that scan race is what broke the earlier auto-restarts), then launches it.
+    """
+    exe = sys.executable
+    try:
+        ps = ("$ErrorActionPreference='SilentlyContinue';"
+              "Wait-Process -Id %d -Timeout 30;"
+              "Get-FileHash -LiteralPath '%s' | Out-Null;"   # force AV to scan it now
+              "Start-Sleep -Milliseconds 500;"
+              "Start-Process -FilePath '%s'") % (os.getpid(), exe, exe)
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+            creationflags=0x08000000)  # CREATE_NO_WINDOW
+    except Exception:
+        pass
 
 
 def _cleanup_old_update():
