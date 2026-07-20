@@ -21,11 +21,21 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
+# Prefer the repo-local venv; fall back to whatever python is on PATH.
+$venvPy = Join-Path $root ".venv\Scripts\python.exe"
+if (Test-Path $venvPy) {
+    $py = $venvPy
+    Write-Host "==> Using venv: $venvPy" -ForegroundColor DarkGray
+} else {
+    $py = "python"
+    Write-Host "==> No .venv found; using python from PATH" -ForegroundColor DarkGray
+}
+
 Write-Host "==> Compile check" -ForegroundColor Cyan
-python -m py_compile ntp_time_sync.pyw
+& $py -m py_compile ntp_time_sync.pyw
 
 Write-Host "==> Building exe (PyInstaller)" -ForegroundColor Cyan
-python -m PyInstaller --noconfirm --clean --onefile --windowed `
+& $py -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name "NTP Time Sync" --icon "$root\app.ico" `
     --hidden-import pystray._win32 `
     --distpath dist --workpath build --specpath build ntp_time_sync.pyw | Out-Null
