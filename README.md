@@ -117,12 +117,19 @@ First-time build deps: `pip install pyinstaller`.
 
 ### Cut a release (for sharing)
 
-After `.\build.ps1 -NoDeploy`, publish the exe so others can download it:
+Bump `APP_VERSION` in `ntp_time_sync.pyw` first, then `.\build.ps1 -NoDeploy`, then
+publish the exe so others can download it:
 
 ```
 Copy-Item "dist\NTP Time Sync.exe" "dist\NTP-Time-Sync.exe" -Force
-gh release create vX.Y.Z "dist\NTP-Time-Sync.exe" --title "NTP Time Sync vX.Y.Z" --notes "..."
+# Write the notes to a file, then:
+gh release create vX.Y.Z "dist\NTP-Time-Sync.exe" --title "NTP Time Sync vX.Y.Z" --notes-file notes.md
 ```
+
+Use `--notes-file`, not `--notes "..."`. Windows PowerShell 5.1 mangles a multi-line
+string on its way to a native `.exe` — it arrives split on whitespace, and `gh` fails
+with something unhelpful like ``no matches found for `but` `` (it read a stray word as
+a file glob). Single-line notes are fine either way; a file always is.
 
 `README` links to `/releases/latest`, so it always points at the newest.
 

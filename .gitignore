@@ -1,6 +1,9 @@
 # Runtime config (user-specific; created on first run)
 config.json
 
+# Scratch release notes for `gh release create --notes-file`
+notes.md
+
 # Python
 __pycache__/
 *.py[cod]
