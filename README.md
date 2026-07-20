@@ -155,6 +155,7 @@ defaults:
   "green_max_offset": 1.0,
   "yellow_max_offset": 2.0,
   "stale_minutes": 40,
+  "dns_cache_minutes": 30,
   "auto_check_updates": false,
   "require_server": false
 }
@@ -166,6 +167,12 @@ defaults:
 - **green_max_offset / yellow_max_offset** — thresholds in seconds.
 - **poll_seconds** — how often to probe.
 - **stale_minutes** — if the last successful sync is older than this, don't show green.
+- **dns_cache_minutes** — how long to reuse the server's resolved IP. A hostname would
+  otherwise be looked up on *every* poll — at the default 45 s that's ~1,900 DNS queries
+  a day, enough to look like abuse to a local resolver (`pool.ntp.org` in particular
+  rotates answers on a short TTL). Pinning one address also keeps consecutive samples
+  on the same server. A failed probe re-resolves immediately, so a dead address
+  self-corrects. Set `0` to resolve every poll; ignored when the server is an IP.
 - **auto_check_updates** — check GitHub for a newer release at startup (toggle from the menu).
 - **require_server** — if `true`, also warn (yellow) unless Windows is syncing to this
   exact server. Off by default (the light follows your clock's accuracy regardless of

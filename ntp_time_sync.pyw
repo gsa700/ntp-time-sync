@@ -36,6 +36,8 @@ import os
 import re
 import sys
 import json
+import time
+import socket
 import threading
 import subprocess
 import webbrowser
@@ -73,6 +75,7 @@ DEFAULTS = {
     "green_max_offset": 1.0,    # abs seconds - FT8 needs < ~1s
     "yellow_max_offset": 2.0,   # abs seconds
     "stale_minutes": 40,        # last sync older than this -> not green
+    "dns_cache_minutes": 30,    # reuse the resolved IP this long (0 = resolve every poll)
     "auto_check_updates": False,  # check GitHub for a newer release at startup
     "logon_initialized": False,   # first run enables Start-at-logon by default
     "require_server": False,      # if True, warn unless Windows syncs to this exact server
@@ -118,6 +121,63 @@ def _parse_time(val):
         except ValueError:
             continue
     return None
+
+
+_dns_cache = {}                       # host -> (ip, expiry from time.monotonic())
+_dns_lock = threading.Lock()
+
+
+def _is_ip_literal(host):
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            socket.inet_pton(family, host)
+            return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def resolve_server(host, ttl_minutes=30):
+    """Resolve host to an IP, caching the answer so polling doesn't hammer DNS.
+
+    w32tm resolves the name itself on every call, and pool.ntp.org hands out
+    rotating answers with a short TTL - at a 45 s poll that is ~1900 lookups a
+    day from one machine, which looks like abuse to a local resolver. Pinning
+    one address between lookups also means consecutive samples come from the
+    same server, which is what you want when measuring offset.
+
+    Returns the host unchanged if it is already an IP, if caching is disabled,
+    or if resolution fails (let w32tm try and report the error as before).
+    """
+    if not host or _is_ip_literal(host):
+        return host
+    if ttl_minutes <= 0:
+        return host
+    now = time.monotonic()
+    with _dns_lock:
+        hit = _dns_cache.get(host)
+        if hit is not None and now < hit[1]:
+            return hit[0]
+    try:
+        infos = socket.getaddrinfo(host, 123, 0, socket.SOCK_DGRAM)
+    except (socket.gaierror, OSError):
+        return host
+    if not infos:
+        return host
+    ip = infos[0][4][0]
+    with _dns_lock:
+        _dns_cache[host] = (ip, now + ttl_minutes * 60)
+    return ip
+
+
+def forget_resolved(host):
+    """Drop a cached address so the next probe re-resolves.
+
+    Called when a probe fails: the pinned address may have gone away, and a
+    fresh lookup can hand back a different, working one.
+    """
+    with _dns_lock:
+        _dns_cache.pop(host, None)
 
 
 def service_running():
@@ -172,21 +232,30 @@ def query_status():
     return out
 
 
-def probe_offset(server):
-    """Return (offset_seconds or None, reachable bool)."""
+def probe_offset(server, dns_ttl_minutes=30):
+    """Return (offset_seconds or None, reachable bool).
+
+    Probes the cached IP rather than the hostname so each poll doesn't trigger
+    a fresh DNS lookup; a failure drops the cache entry so the next poll
+    re-resolves.
+    """
     if not server:
         return (None, False)
+    target = resolve_server(server, dns_ttl_minutes)
     try:
-        p = _run(["w32tm", "/stripchart", "/computer:%s" % server,
+        p = _run(["w32tm", "/stripchart", "/computer:%s" % target,
                   "/samples:1", "/dataonly"], timeout=12)
         text = (p.stdout or "") + (p.stderr or "")
         if "error" in text.lower():
+            forget_resolved(server)
             return (None, False)
         matches = re.findall(r"([+-]?\d+\.\d+)s\b", text)
         if not matches:
+            forget_resolved(server)
             return (None, False)
         return (float(matches[-1]), True)
     except Exception:
+        forget_resolved(server)
         return (None, False)
 
 
@@ -203,7 +272,7 @@ def evaluate(cfg):
     """
     st = query_status()
     server = cfg["server"]
-    offset, reachable = probe_offset(server)
+    offset, reachable = probe_offset(server, cfg.get("dns_cache_minutes", 30))
     svc_up = service_running()
     source = st["source"] or ""
     low = source.lower()

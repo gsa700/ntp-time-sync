@@ -3,5 +3,6 @@
   "poll_seconds": 45,
   "green_max_offset": 1.0,
   "yellow_max_offset": 2.0,
-  "stale_minutes": 40
+  "stale_minutes": 40,
+  "dns_cache_minutes": 30
 }
