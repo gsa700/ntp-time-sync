@@ -24,15 +24,16 @@ A single self-contained executable — **no Python, no installer, no dependencie
 2. Double-click it — a colored dot appears in the system tray.
 3. **Windows SmartScreen** may say *"Windows protected your PC"* because the app isn't
    code-signed. Click **More info → Run anyway**. It's open source; every line is in this repo.
-4. On **Windows 11**, do the one-time step in [Make the icon visible](#make-the-icon-visible-windows-11) below.
+4. If no dot appears, see [Make the icon visible](#make-the-icon-visible-windows-11) below.
 5. **Start at logon** is on by default; change it (and update checks) from the right-click menu.
 
 First run creates its settings at `%APPDATA%\NTP Time Sync\config.json`.
 
 ## Make the icon visible (Windows 11)
 
-Windows 11 **hides new tray icons by default** — the app is running, but the dot won't
-show on the taskbar until you allow it once:
+Usually nothing to do — the dot normally appears on its own. But Windows 11 can
+**hide new tray icons**, in which case the app is running and the dot simply isn't
+on the taskbar. If that happens:
 
 **Settings → Personalization → Taskbar → Other system tray icons →** turn the
 **NTP Time Sync** entry **On**.
@@ -44,7 +45,7 @@ One-time and per-app; it sticks afterward. (Windows 10 shows the icon automatica
 | Color  | Meaning |
 |--------|---------|
 | 🟢 Green  | Clock accurate — \|offset\| < 1 s vs. the reference server |
-| 🟡 Yellow | Drifting (1–2 s), not NTP-synced (on the free-running CMOS clock), or last sync stale (> 40 min) |
+| 🟡 Yellow | Drifting (1–2 s), the Windows Time service isn't running, not NTP-synced (on the free-running CMOS clock), or last sync stale (> 40 min) |
 | 🔴 Red    | \|offset\| > 2 s, or the reference server is unreachable |
 | ⚪ Gray   | Starting up / probe error |
 
@@ -65,7 +66,10 @@ header over the live readout, with every action one click away:
 - **Colored header** — green / yellow / red with the reason, readable at a glance
 - **Readout** — offset, server, source, last sync (updates live while open)
 - **Refresh** — re-probe immediately
-- **Resync (admin)** — `w32tm /resync /force`; opens an elevated PowerShell (UAC)
+- **Resync (admin)** — starts the time service if needed, then `w32tm /resync /force`;
+  opens an elevated PowerShell (UAC)
+- **Start service (admin)** — appears only when the Windows Time service is stopped;
+  offers to also set it to start at boot (see below)
 - **Configure… (admin)** — change the NTP server, then applies it elevated (UAC)
 - **Open time.is** — browser sanity check
 - **Close**
@@ -92,6 +96,12 @@ pythonw ntp_time_sync.pyw
 
 Double-clicking `ntp_time_sync.pyw` also works (runs windowless via `pythonw`).
 
+Running from source never touches the installed app's startup entry: it uses its
+own `NtpTimeSync-dev` registry value, and unlike the `.exe` it does **not** enable
+Start-at-logon on first run — toggle it from the menu if you want it. Its
+`config.json` also lives next to the script, not in `%APPDATA%`, so a dev instance
+and an installed copy keep separate settings.
+
 ### Build & update your install
 
 One command rebuilds the exe and updates your installed copy (stops it,
@@ -115,6 +125,22 @@ gh release create vX.Y.Z "dist\NTP-Time-Sync.exe" --title "NTP Time Sync vX.Y.Z"
 ```
 
 `README` links to `/releases/latest`, so it always points at the newest.
+
+## When the time service isn't running
+
+A fresh, non-domain Windows install leaves **Windows Time set to start manually**
+(trigger-start), and it is often simply *stopped*. Nothing looks wrong — but nothing
+is disciplining your clock either, so it free-runs and drifts. This is a common
+cause of "signals but no decodes."
+
+The app shows this as **yellow — "Windows Time service not running"**, and the panel
+grows a **Start service (admin)** button. Because a manually-started service can stop
+again after a reboot, that button also offers to set it to **start automatically**.
+That's a persistent change to a system service, so it's always an explicit choice —
+answer **No** to just start it this once.
+
+Every `w32tm /query` fails with `0x80070426` ("The service has not been started")
+while it's stopped, which is why **Resync** starts the service before resyncing.
 
 ## Configure
 

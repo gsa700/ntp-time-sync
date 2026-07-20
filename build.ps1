@@ -47,7 +47,25 @@ Write-Host "==> Built $built ($mb MB)" -ForegroundColor Green
 
 if ($NoDeploy) { Write-Host "==> -NoDeploy set; skipping install." ; return }
 
-$dest = Join-Path $env:LOCALAPPDATA "Programs\NTP Time Sync\NTP-Time-Sync.exe"
+# Deploy over the copy that is actually installed, not a hardcoded guess: the
+# exe may sit anywhere the user put it, and the Start-at-logon entry points at
+# that path. Writing to the recommended folder regardless would leave a second
+# install behind and a logon entry still aimed at the old one.
+$dest = $null
+$run = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
+    -Name NtpTimeSync -ErrorAction SilentlyContinue
+if ($run) {
+    $candidate = $run.NtpTimeSync.Trim('"')
+    # Ignore a dev-checkout entry (pythonw + script); only follow a real exe.
+    if ($candidate -like "*.exe" -and $candidate -notlike "*pythonw*") { $dest = $candidate }
+}
+if ($dest) {
+    Write-Host "==> Existing install: $dest" -ForegroundColor DarkGray
+} else {
+    $dest = Join-Path $env:LOCALAPPDATA "Programs\NTP Time Sync\NTP-Time-Sync.exe"
+    Write-Host "==> No install found; using default: $dest" -ForegroundColor DarkGray
+}
+
 Write-Host "==> Stopping running instances" -ForegroundColor Cyan
 Get-CimInstance Win32_Process | Where-Object { $_.Name -match "NTP.?Time.?Sync" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }

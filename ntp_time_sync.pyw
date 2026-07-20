@@ -120,6 +120,41 @@ def _parse_time(val):
     return None
 
 
+def service_running():
+    """True/False if w32time is running, None if it can't be determined.
+
+    Uses the numeric STATE code from `sc query`, which is the same on localized
+    Windows even though the word next to it is translated. Read-only, no admin.
+    A stopped w32time makes every `w32tm /query` fail with 0x80070426, so this
+    has to be asked separately rather than inferred from an empty status.
+    """
+    try:
+        p = _run(["sc", "query", "w32time"], timeout=8)
+        m = re.search(r"STATE\s+:\s+(\d+)", p.stdout or "")
+        if not m:
+            return None
+        return m.group(1) == "4"          # 4 = SERVICE_RUNNING, 1 = STOPPED
+    except Exception:
+        return None
+
+
+def service_autostart():
+    """True if w32time is set to start automatically, False if not, None if unknown.
+
+    Reads the Start value straight from the registry (2 = Automatic,
+    3 = Manual/trigger, 4 = Disabled) so it doesn't depend on `sc` wording.
+    A fresh non-domain Windows install ships this as 3, which is why the clock
+    can quietly stop syncing with nothing visibly wrong.
+    """
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Services\W32Time") as k:
+            return winreg.QueryValueEx(k, "Start")[0] == 2
+    except OSError:
+        return None
+
+
 def query_status():
     out = {"source": None, "last_sync": None, "stratum": None}
     try:
@@ -169,6 +204,7 @@ def evaluate(cfg):
     st = query_status()
     server = cfg["server"]
     offset, reachable = probe_offset(server)
+    svc_up = service_running()
     source = st["source"] or ""
     low = source.lower()
     not_ntp = (not source) or ("cmos" in low) or ("free-running" in low)
@@ -187,6 +223,10 @@ def evaluate(cfg):
         wrong = cfg.get("require_server", False) and bool(server) and server not in source
         if a >= cfg["yellow_max_offset"]:
             color, reason = "red", "offset %+.3f s" % offset
+        elif svc_up is False:
+            # Checked before the CMOS case: with the service stopped the source
+            # is empty for a different reason, and the fix is a different button.
+            color, reason = "yellow", "Windows Time service not running"
         elif not_ntp:
             color, reason = "yellow", "not NTP-synced (CMOS clock)"
         elif wrong:
@@ -206,10 +246,17 @@ def evaluate(cfg):
     else:
         lastsync_txt = "n/a"
 
+    if source:
+        source_txt = source
+    elif svc_up is False:
+        source_txt = "service not running"
+    else:
+        source_txt = "n/a"
+
     return {
         "color": color, "reason": reason, "server": server,
-        "offset_txt": offset_txt, "source": source or "n/a",
-        "lastsync_txt": lastsync_txt,
+        "offset_txt": offset_txt, "source": source_txt,
+        "lastsync_txt": lastsync_txt, "svc_up": svc_up,
     }
 
 
@@ -246,7 +293,21 @@ def run_elevated_ps(ps_command):
 
 
 def action_resync():
-    run_elevated_ps("w32tm /resync /force; w32tm /query /status")
+    # Start the service first: on a stopped w32time a bare /resync just fails
+    # with 0x80070426 and leaves the user stuck. Starting an already-running
+    # service is a no-op, so this is safe either way.
+    run_elevated_ps("Start-Service w32time; "
+                    "w32tm /resync /force; "
+                    "w32tm /query /status")
+
+
+def action_start_service(set_automatic=False):
+    """Start w32time, optionally making it start at boot from then on."""
+    ps = "Start-Service w32time; "
+    if set_automatic:
+        ps += "Set-Service w32time -StartupType Automatic; "
+    ps += "w32tm /resync /force; w32tm /query /status"
+    run_elevated_ps(ps)
 
 
 def action_configure_apply(server):
@@ -260,7 +321,10 @@ def action_configure_apply(server):
 # --------------------------------------------------------------- start at logon
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-RUN_VALUE = "NtpTimeSync"
+# Running from source uses its own value name so a dev checkout can never
+# overwrite the installed .exe's startup entry (they'd otherwise collide, and
+# the last one to run would silently own your logon).
+RUN_VALUE = "NtpTimeSync" if FROZEN else "NtpTimeSync-dev"
 
 
 def _logon_command():
@@ -306,6 +370,7 @@ class State:
         self.offset_txt = "..."
         self.source = "..."
         self.lastsync_txt = "..."
+        self.svc_up = None
         self.icon = None
         self.stop = threading.Event()
 
@@ -316,6 +381,7 @@ class State:
         self.offset_txt = fields["offset_txt"]
         self.source = fields["source"]
         self.lastsync_txt = fields["lastsync_txt"]
+        self.svc_up = fields.get("svc_up")
 
     def tooltip(self):
         return "%s v%s\n%s  %s\n%s" % (
@@ -374,6 +440,7 @@ class StatusPanel:
         self.win = None
         self.hdr = None
         self.hdr_lbl = None
+        self.btn_startsvc = None
         self.rows = {}
         self._ready = threading.Event()
 
@@ -452,14 +519,18 @@ class StatusPanel:
         bf.columnconfigure(1, weight=1, uniform="btn")
 
         def mkbtn(text, cmd, r, c):
-            tk.Button(bf, text=text, command=cmd, font=("Segoe UI", 9)).grid(
-                row=r, column=c, sticky="ew", padx=3, pady=3)
+            b = tk.Button(bf, text=text, command=cmd, font=("Segoe UI", 9))
+            b.grid(row=r, column=c, sticky="ew", padx=3, pady=3)
+            return b
 
         mkbtn("Refresh",
               lambda: threading.Thread(target=refresh_once, daemon=True).start(), 0, 0)
         mkbtn("Resync  (admin)", self._do_resync, 0, 1)
         mkbtn("Configure…  (admin)", self._do_configure, 1, 0)
         mkbtn("Open time.is", self._do_timeis, 1, 1)
+        # Only meaningful while the service is stopped; hidden the rest of the time.
+        self.btn_startsvc = mkbtn("Start service  (admin)", self._do_start_service, 2, 0)
+        self.btn_startsvc.grid_remove()
         mkbtn("Close", self._hide, 2, 1)
 
         self.win.bind("<FocusOut>", self._on_focus_out)
@@ -496,6 +567,25 @@ class StatusPanel:
 
     def _do_resync(self):
         action_resync()
+
+    def _do_start_service(self):
+        from tkinter import messagebox
+        # Offer the persistent fix, but never make it the silent default: a fresh
+        # non-domain Windows leaves w32time on Manual/trigger start, which is the
+        # usual reason the clock quietly stops syncing between reboots.
+        set_auto = False
+        if service_autostart() is False:
+            set_auto = messagebox.askyesno(
+                APP_NAME,
+                "Start the Windows Time service now?\n\n"
+                "It is currently set to start manually, so it may stop again "
+                "after a reboot. Also set it to start automatically?\n\n"
+                "Yes - start it and set it to start at boot\n"
+                "No  - just start it this once\n\n"
+                "Either way a UAC prompt will appear.",
+                parent=self.win)
+        action_start_service(set_auto)
+        threading.Thread(target=refresh_once, daemon=True).start()
 
     def _do_timeis(self):
         webbrowser.open("https://time.is")
@@ -584,6 +674,11 @@ class StatusPanel:
         self.rows["server"].configure(text=state.server)
         self.rows["source"].configure(text=state.source)
         self.rows["lastsync"].configure(text=state.lastsync_txt)
+        if self.btn_startsvc is not None:
+            if state.svc_up is False:
+                self.btn_startsvc.grid()
+            else:
+                self.btn_startsvc.grid_remove()
 
 
 panel = StatusPanel()
@@ -751,7 +846,9 @@ def build_menu():
 def main():
     _cleanup_old_update()
     panel.start()
-    if not state.cfg.get("logon_initialized", False):
+    if FROZEN and not state.cfg.get("logon_initialized", False):
+        # Installed .exe only: running from source shouldn't quietly add the dev
+        # checkout to your startup. From source it stays opt-in via the menu.
         set_logon(True)                       # default Start-at-logon ON, first run only
         state.cfg["logon_initialized"] = True
         save_config(state.cfg)
