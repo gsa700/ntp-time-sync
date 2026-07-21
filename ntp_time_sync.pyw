@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.15"
+APP_VERSION = "1.3.16"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -423,66 +423,116 @@ def action_configure_apply(server):
 
 
 # --------------------------------------------------------------- start at logon
+#
+# Autostart uses a Startup-folder shortcut, not a Run-key value. On a real
+# machine the Run-key entry silently never fired at logon (the process was never
+# created), while a Startup-folder shortcut launched reliably -- and unlike a
+# scheduled task it needs no elevation. A dev checkout still uses a Run-key value
+# so it can toggle startup without dropping a .lnk in the Startup folder.
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-# Running from source uses its own value name so a dev checkout can never
-# overwrite the installed .exe's startup entry (they'd otherwise collide, and
-# the last one to run would silently own your logon).
 RUN_VALUE = "NtpTimeSync" if FROZEN else "NtpTimeSync-dev"
 
 
 def _logon_command():
-    """Command to relaunch at logon: the exe itself when frozen, else pythonw + script."""
-    if FROZEN:
-        return '"%s"' % sys.executable
+    """Dev-mode Run-key command: pythonw + script."""
     pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
     exe = pyw if os.path.exists(pyw) else sys.executable
     return '"%s" "%s"' % (exe, os.path.abspath(__file__))
 
 
-def logon_enabled():
+def _set_run_key(enable):
+    """Create the dev Run-key value, or remove it. Also used to clear a legacy
+    value left by older installed builds so it can't double-launch the shortcut."""
     import winreg
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-            winreg.QueryValueEx(k, RUN_VALUE)
-            return True
-    except OSError:
-        return False
-
-
-def _set_run_key(enable, target_exe=None):
-    """Low-level: create or remove the Run-key value. When enabling, point it at
-    target_exe (the installed copy) for the packaged app, or pythonw+script in
-    dev. Does not touch config -- callers own intent."""
-    import winreg
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-        if enable:
-            cmd = ('"%s"' % (target_exe or sys.executable)) if FROZEN else _logon_command()
-            winreg.SetValueEx(k, RUN_VALUE, 0, winreg.REG_SZ, cmd)
-        else:
-            try:
+    if enable:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            winreg.SetValueEx(k, RUN_VALUE, 0, winreg.REG_SZ, _logon_command())
+    else:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                                winreg.KEY_SET_VALUE) as k:
                 winreg.DeleteValue(k, RUN_VALUE)
-            except FileNotFoundError:
-                pass
+        except OSError:
+            pass
+
+
+def _startup_dir():
+    return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                        "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+
+
+def _startup_shortcut():
+    return os.path.join(_startup_dir(), APP_NAME + ".lnk")
+
+
+def _write_shortcut(target):
+    """Create/refresh the Startup-folder .lnk via the Shell COM (no extra Python
+    deps). Called only when the shortcut is missing, so it isn't a per-launch
+    cost; the hidden PowerShell keeps it off-screen."""
+    lnk = _startup_shortcut()
+    q = lambda s: s.replace("'", "''")
+    script = (
+        "$w=New-Object -ComObject WScript.Shell;"
+        "$s=$w.CreateShortcut('%s');"
+        "$s.TargetPath='%s';$s.WorkingDirectory='%s';"
+        "$s.Description='%s';$s.Save()"
+        % (q(lnk), q(target), q(os.path.dirname(target)), APP_NAME))
+    try:
+        os.makedirs(_startup_dir(), exist_ok=True)
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                       creationflags=CREATE_NO_WINDOW, timeout=25)
+    except Exception:
+        pass
+
+
+def _remove_shortcut():
+    try:
+        os.remove(_startup_shortcut())
+    except OSError:
+        pass
+
+
+def logon_enabled():
+    if not FROZEN:
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+                winreg.QueryValueEx(k, RUN_VALUE)
+                return True
+        except OSError:
+            return False
+    return os.path.exists(_startup_shortcut())
 
 
 def set_logon(enable):
-    """Menu / first-run entry point: record the intent in config and make the
-    Run key match. The installed copy points startup at its own path."""
+    """Menu / install entry point: record intent and make autostart match. Frozen
+    app uses a Startup-folder shortcut; a dev checkout uses a Run-key value."""
     try:
         state.cfg["start_at_logon"] = bool(enable)
         save_config(state.cfg)
     except Exception:
         pass
-    _set_run_key(enable, INSTALL_EXE if IS_INSTALLED else None)
+    if not FROZEN:
+        _set_run_key(enable)
+        return
+    _set_run_key(False)                      # clear any legacy Run-key value
+    if enable:
+        _write_shortcut(INSTALL_EXE if IS_INSTALLED else sys.executable)
+    else:
+        _remove_shortcut()
 
 
 def reconcile_logon():
-    """Installed copy only: force the Run key to match intent and point at THIS
-    exe. Heals a stale entry (old path) or the "flag says on but key is missing"
-    case that used to leave startup silently broken."""
-    want = bool(state.cfg.get("start_at_logon", True))
-    _set_run_key(want, INSTALL_EXE if want else None)
+    """Installed copy: drop any legacy Run-key value and make the Startup shortcut
+    match intent. Creates it when wanted-but-missing (also the migration path from
+    an older Run-key install); removes it when startup is turned off."""
+    _set_run_key(False)
+    if bool(state.cfg.get("start_at_logon", True)):
+        if not os.path.exists(_startup_shortcut()):
+            _write_shortcut(INSTALL_EXE)
+    else:
+        _remove_shortcut()
 
 
 # --------------------------------------------------------------- install / uninstall
@@ -557,7 +607,8 @@ def do_install():
     try:
         state.cfg["start_at_logon"] = True
         save_config(state.cfg)
-        _set_run_key(True, INSTALL_EXE)
+        _set_run_key(False)                # ensure no legacy Run-key value lingers
+        _write_shortcut(INSTALL_EXE)       # autostart points at the installed copy
         register_uninstall()
     except Exception:
         pass
@@ -625,6 +676,7 @@ def do_uninstall():
                    _MB_YESNO | _MB_ICONQUESTION) != _IDYES:
             return
     _set_run_key(False)
+    _remove_shortcut()
     unregister_uninstall()
     remove_settings = quiet
     if not quiet:
@@ -1194,6 +1246,23 @@ def _startup_log(msg):
         pass
 
 
+_singleton_handle = None
+
+
+def _acquire_singleton():
+    """False if another instance already holds the named mutex. Guards against a
+    second tray icon if more than one launch path ever fires (e.g. a lingering
+    Run-key value plus the Startup shortcut). Keeps a module-level ref so the
+    handle lives for the whole process."""
+    global _singleton_handle
+    try:
+        k32 = ctypes.windll.kernel32
+        _singleton_handle = k32.CreateMutexW(None, False, "Local\\NtpTimeSync_singleton")
+        return k32.GetLastError() != 183          # ERROR_ALREADY_EXISTS
+    except Exception:
+        return True
+
+
 def _log_startup_error():
     """Append a traceback to CONFIG_DIR so a silent windowed-app crash at logon
     leaves evidence instead of just vanishing."""
@@ -1226,8 +1295,12 @@ def main():
         if offer_install():
             return
 
+    if not _acquire_singleton():
+        _startup_log("another instance already running; exiting")
+        return
+
     if IS_INSTALLED:
-        reconcile_logon()             # keep the Run key valid and pointing here
+        reconcile_logon()             # clear legacy Run key; ensure Startup shortcut
         refresh_uninstall_entry()     # keep the Add/Remove version current
 
     panel.start()
