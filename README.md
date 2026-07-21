@@ -14,21 +14,35 @@ no numbers to read — just a dot by the clock.
 
 ## Download (recommended)
 
-A single self-contained executable — **no Python, no installer, no dependencies.**
+A single self-contained executable — **no Python, no dependencies.**
 
 **⬇ [Download the latest `NTP-Time-Sync.exe`](https://github.com/gsa700/ntp-time-sync/releases/latest)**
 
-1. Download the `.exe` and put it in a **stable, writable folder** — the recommended spot is
-   `%LOCALAPPDATA%\Programs\NTP Time Sync\` (create it if needed). A fixed location keeps
-   Start-at-logon and the tray-visibility setting working, and lets the app **update itself in place**.
-2. Double-click it — a colored dot appears in the system tray.
-3. **Windows SmartScreen** may say *"Windows protected your PC"* because the app isn't
+1. **Double-click** the downloaded `.exe`.
+2. **Windows SmartScreen** may say *"Windows protected your PC"* because the app isn't
    code-signed. Click **More info → Run anyway**. It's open source; every line is in this repo.
-4. If no dot appears, see [Make the icon visible](#make-the-icon-visible-windows-11) below.
-5. **Start at logon** is on by default; change it (and update checks) from the right-click menu.
+3. It asks whether to **install**:
+   - **Yes** — copies itself into your user profile, starts at logon, and appears in
+     **Settings → Apps → Installed apps** so you can remove it later. You don't pick a
+     folder or see any paths; delete the download afterward.
+   - **No** — just runs once from where it is, installing nothing.
+4. A colored dot appears in the system tray. If it doesn't, see
+   [Make the icon visible](#make-the-icon-visible-windows-11) below.
 
-That's it. Settings are created automatically on first run; to find or edit them later,
-right-click the tray icon and choose **Open settings folder**.
+That's it. Settings are created automatically; to find or edit them later, right-click the
+tray icon and choose **Open settings folder**. To remove the app, use **Uninstall** in
+Windows' *Installed apps* (or the tray menu).
+
+### Portable edition (run from anywhere)
+
+Prefer to run it off a USB stick, or on a machine you can't or won't install on?
+
+**⬇ [Download `NTP-Time-Sync-portable.zip`](https://github.com/gsa700/ntp-time-sync/releases/latest)**
+
+Extract it anywhere and run the `.exe`. Because a `portable.txt` marker sits beside it, the
+app **keeps its settings in that folder, never installs itself, and touches nothing on the
+machine** — no Start-at-logon entry, no *Installed apps* listing. Delete the folder and it's
+gone without a trace. (Delete `portable.txt` if you later want that copy to install normally.)
 
 ## Make the icon visible (Windows 11)
 
@@ -77,7 +91,8 @@ header over the live readout, with every action one click away:
 
 **Right-click** the dot for the rest: **Start at logon** (on by default),
 **Check for updates**, **Auto-check on startup** (off by default),
-**Open settings folder**, and **Quit**.
+**Open settings folder**, and **Quit**. An installed copy also shows **Uninstall…**;
+a loose (not-yet-installed) copy shows **Install NTP Time Sync…** instead.
 
 When a newer release exists, **Check for updates** offers to **download and install
 it in place**, then asks to **Restart now** to finish (or choose No — it also starts
@@ -98,34 +113,41 @@ pythonw ntp_time_sync.pyw
 
 Double-clicking `ntp_time_sync.pyw` also works (runs windowless via `pythonw`).
 
-Running from source never touches the installed app's startup entry: it uses its
-own `NtpTimeSync-dev` registry value, and unlike the `.exe` it does **not** enable
-Start-at-logon on first run — toggle it from the menu if you want it. Its
-`config.json` also lives next to the script, not in `%APPDATA%`, so a dev instance
-and an installed copy keep separate settings.
+Running from source never touches the installed app: it uses its own
+`NtpTimeSync-dev` startup entry, never offers to install itself, and keeps its
+`config.json` next to the script rather than in `%APPDATA%` — so a dev checkout and
+an installed copy stay fully separate.
+
+The packaged `.exe` decides its behavior at launch from where it's run: from the
+per-user install dir it runs installed (config in `%APPDATA%`, starts at logon,
+listed in *Installed apps*); with a `portable.txt` marker beside it, portable (config
+local, no trace); anywhere else, loose — it offers to install on first run. Silent
+`--install` and `--uninstall` (add `--quiet`) flags drive those without prompts.
 
 ### Build & update your install
 
-One command rebuilds the exe and updates your installed copy (stops it,
-overwrites `%LOCALAPPDATA%\Programs\NTP Time Sync\`, relaunches). Settings in
-`%APPDATA%` are preserved:
+One command rebuilds the exe and updates your installed copy (stops it, overwrites
+the installed exe wherever it lives, relaunches). Settings in `%APPDATA%` are
+preserved. Every build also refreshes `dist\NTP-Time-Sync.exe` and the portable zip:
 
 ```
 .\build.ps1              # build + update your install
-.\build.ps1 -NoDeploy    # just build into dist\
+.\build.ps1 -NoDeploy    # just build into dist\ (exe + portable zip)
 ```
 
 First-time build deps: `pip install pyinstaller`.
 
 ### Cut a release (for sharing)
 
-Bump `APP_VERSION` in `ntp_time_sync.pyw` first, then `.\build.ps1 -NoDeploy`, then
-publish the exe so others can download it:
+Bump `APP_VERSION` in `ntp_time_sync.pyw` first, then `.\build.ps1 -NoDeploy` (which
+produces both `dist\NTP-Time-Sync.exe` and `dist\NTP-Time-Sync-portable.zip`), then
+publish **both** assets so others can download them:
 
 ```
-Copy-Item "dist\NTP Time Sync.exe" "dist\NTP-Time-Sync.exe" -Force
-# Write the notes to a file, then:
-gh release create vX.Y.Z "dist\NTP-Time-Sync.exe" --title "NTP Time Sync vX.Y.Z" --notes-file notes.md
+# Write the notes to a file, then upload both the exe and the portable zip:
+gh release create vX.Y.Z `
+    "dist\NTP-Time-Sync.exe" "dist\NTP-Time-Sync-portable.zip" `
+    --title "NTP Time Sync vX.Y.Z" --notes-file notes.md
 ```
 
 Use `--notes-file`, not `--notes "..."`. Windows PowerShell 5.1 mangles a multi-line
@@ -188,7 +210,9 @@ first run). Its defaults:
   which server Windows uses). Turn it on if you run a dedicated source and want to be
   told when Windows isn't using it.
 
-The file also stores an internal `logon_initialized` flag (managed automatically — leave it).
+`start_at_logon` records whether you want the app to start at logon (toggle it from
+the tray menu, not by hand); the installed copy keeps the Windows startup entry in
+step with it on every launch.
 
 To change a setting: **Open settings folder**, edit `config.json`, and restart the app.
 To change just the server, the **Configure…** button in the panel does it from the UI —

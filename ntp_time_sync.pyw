@@ -37,7 +37,9 @@ import re
 import sys
 import json
 import time
+import shutil
 import socket
+import tempfile
 import threading
 import subprocess
 import webbrowser
@@ -54,14 +56,46 @@ RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
 FROZEN = getattr(sys, "frozen", False)
 
-# When bundled to an .exe (PyInstaller), the program may live in a read-only
-# location (Program Files) and __file__ points into a temp extraction dir, so
-# keep config in %APPDATA%. When run as a script, keep it next to the script.
-if FROZEN:
-    CONFIG_DIR = os.path.join(
-        os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
+# --------------------------------------------------------------- install model
+# One exe, three run modes decided at launch:
+#   portable  - a `portable.txt` marker sits beside the exe (the .zip edition).
+#               Config lives next to the exe; nothing is installed, no Run key,
+#               no Add/Remove entry. Runs from a USB stick and leaves no trace.
+#   installed - running from the per-user install dir under %LOCALAPPDATA%.
+#               Config in %APPDATA%, starts at logon, listed in Add/Remove.
+#   loose     - a bare exe run from Downloads etc. On first run it offers to
+#               install itself; if declined it runs once in place.
+INSTALL_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "Programs", APP_NAME)
+INSTALL_EXE = os.path.join(INSTALL_DIR, "NTP-Time-Sync.exe")
+PORTABLE_MARKER = "portable.txt"
+
+
+def _same_path(a, b):
+    try:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    except Exception:
+        return False
+
+
+def _exe_dir():
+    return os.path.dirname(os.path.abspath(sys.executable))
+
+
+IS_PORTABLE = FROZEN and os.path.exists(os.path.join(_exe_dir(), PORTABLE_MARKER))
+IS_INSTALLED = FROZEN and _same_path(sys.executable, INSTALL_EXE)
+IS_LOOSE = FROZEN and not IS_PORTABLE and not IS_INSTALLED
+
+# Config location follows the run mode. A packaged app may live somewhere
+# read-only, and __file__ points into a temp extraction dir, so only the
+# portable edition (which owns its folder) keeps config beside the exe.
+if not FROZEN:
+    CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))   # dev: next to script
+elif IS_PORTABLE:
+    CONFIG_DIR = _exe_dir()                                    # portable: next to exe
 else:
-    CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+    CONFIG_DIR = os.path.join(                                 # installed / loose
+        os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
 try:
     os.makedirs(CONFIG_DIR, exist_ok=True)
 except OSError:
@@ -77,7 +111,8 @@ DEFAULTS = {
     "stale_minutes": 40,        # last sync older than this -> not green
     "dns_cache_minutes": 30,    # reuse the resolved IP this long (0 = resolve every poll)
     "auto_check_updates": False,  # check GitHub for a newer release at startup
-    "logon_initialized": False,   # first run enables Start-at-logon by default
+    "start_at_logon": True,       # desired startup state; the installed copy keeps
+                                  # the Run key reconciled to match this each launch
     "require_server": False,      # if True, warn unless Windows syncs to this exact server
 }
 
@@ -415,17 +450,197 @@ def logon_enabled():
         return False
 
 
-def set_logon(enable):
+def _set_run_key(enable, target_exe=None):
+    """Low-level: create or remove the Run-key value. When enabling, point it at
+    target_exe (the installed copy) for the packaged app, or pythonw+script in
+    dev. Does not touch config -- callers own intent."""
     import winreg
-    cmd = _logon_command()
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
         if enable:
+            cmd = ('"%s"' % (target_exe or sys.executable)) if FROZEN else _logon_command()
             winreg.SetValueEx(k, RUN_VALUE, 0, winreg.REG_SZ, cmd)
         else:
             try:
                 winreg.DeleteValue(k, RUN_VALUE)
             except FileNotFoundError:
                 pass
+
+
+def set_logon(enable):
+    """Menu / first-run entry point: record the intent in config and make the
+    Run key match. The installed copy points startup at its own path."""
+    try:
+        state.cfg["start_at_logon"] = bool(enable)
+        save_config(state.cfg)
+    except Exception:
+        pass
+    _set_run_key(enable, INSTALL_EXE if IS_INSTALLED else None)
+
+
+def reconcile_logon():
+    """Installed copy only: force the Run key to match intent and point at THIS
+    exe. Heals a stale entry (old path) or the "flag says on but key is missing"
+    case that used to leave startup silently broken."""
+    want = bool(state.cfg.get("start_at_logon", True))
+    _set_run_key(want, INSTALL_EXE if want else None)
+
+
+# --------------------------------------------------------------- install / uninstall
+
+ARP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\%s" % APP_NAME
+_MB_YESNO = 0x4
+_MB_ICONQUESTION = 0x20
+_MB_ICONINFO = 0x40
+_MB_ICONWARN = 0x30
+_MB_TOPMOST = 0x40000
+_MB_SETFG = 0x10000
+_IDYES = 6
+
+
+def _msgbox(text, flags=_MB_ICONINFO):
+    return ctypes.windll.user32.MessageBoxW(
+        0, text, APP_NAME, flags | _MB_TOPMOST | _MB_SETFG)
+
+
+def register_uninstall():
+    """Write the Add/Remove Programs entry for the installed copy."""
+    import winreg
+    try:
+        size_kb = int(os.path.getsize(INSTALL_EXE) / 1024)
+    except OSError:
+        size_kb = 0
+    vals = {
+        "DisplayName": APP_NAME,
+        "DisplayVersion": APP_VERSION,
+        "Publisher": "David Erickson (AB0R)",
+        "DisplayIcon": INSTALL_EXE,
+        "InstallLocation": INSTALL_DIR,
+        "UninstallString": '"%s" --uninstall' % INSTALL_EXE,
+        "QuietUninstallString": '"%s" --uninstall --quiet' % INSTALL_EXE,
+        "URLInfoAbout": "https://github.com/%s" % REPO,
+    }
+    dwords = {"NoModify": 1, "NoRepair": 1, "EstimatedSize": size_kb}
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, ARP_KEY) as k:
+        for name, v in vals.items():
+            winreg.SetValueEx(k, name, 0, winreg.REG_SZ, v)
+        for name, v in dwords.items():
+            winreg.SetValueEx(k, name, 0, winreg.REG_DWORD, v)
+
+
+def unregister_uninstall():
+    import winreg
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, ARP_KEY)
+    except OSError:
+        pass
+
+
+def refresh_uninstall_entry():
+    """Keep the Add/Remove version in step with the running exe -- self-update
+    overwrites the exe in place, so the stored DisplayVersion would otherwise go
+    stale."""
+    try:
+        register_uninstall()
+    except Exception:
+        pass
+
+
+def do_install():
+    """Copy this exe into the per-user install dir, wire up startup + the
+    Add/Remove entry, launch the installed copy, and return True. On failure
+    returns False and the caller keeps running in place."""
+    try:
+        os.makedirs(INSTALL_DIR, exist_ok=True)
+        shutil.copy2(sys.executable, INSTALL_EXE)
+    except Exception:
+        return False
+    try:
+        state.cfg["start_at_logon"] = True
+        save_config(state.cfg)
+        _set_run_key(True, INSTALL_EXE)
+        register_uninstall()
+    except Exception:
+        pass
+    try:
+        os.startfile(INSTALL_EXE)          # launch installed copy; this one exits
+    except Exception:
+        return False
+    return True
+
+
+def offer_install():
+    """First-run prompt for a loose exe. Returns True if it installed and
+    relaunched (caller should exit), False to keep running in place."""
+    if os.path.exists(INSTALL_EXE):
+        # Already installed -- don't make a second copy; just hand off to it.
+        try:
+            os.startfile(INSTALL_EXE)
+            return True
+        except Exception:
+            return False
+    choice = _msgbox(
+        "Install %s?\n\n"
+        "It will be copied to your user profile, start automatically at logon, "
+        "and appear in 'Installed apps' so you can remove it later.\n\n"
+        "Yes  -  Install\n"
+        "No   -  Just run once from here" % APP_NAME,
+        _MB_YESNO | _MB_ICONQUESTION)
+    if choice == _IDYES:
+        if do_install():
+            return True
+        _msgbox("Install didn't complete; running in place instead.", _MB_ICONWARN)
+    return False
+
+
+def _schedule_self_delete():
+    """A running exe can't delete itself; hand off to a detached batch that waits
+    for us to exit, kills any lingering tray instance, removes the install dir,
+    then deletes itself."""
+    cmd_path = os.path.join(tempfile.gettempdir(), "ntp_uninstall.cmd")
+    script = (
+        "@echo off\r\n"
+        "ping 127.0.0.1 -n 3 >nul\r\n"                       # ~2s: let us exit
+        'taskkill /f /im "NTP-Time-Sync.exe" >nul 2>&1\r\n'  # stop the tray
+        "ping 127.0.0.1 -n 2 >nul\r\n"
+        'rmdir /s /q "%s" >nul 2>&1\r\n'
+        'del /q "%%~f0" >nul 2>&1\r\n'
+    ) % INSTALL_DIR
+    try:
+        with open(cmd_path, "w", encoding="ascii") as f:
+            f.write(script)
+        subprocess.Popen(
+            ["cmd", "/c", cmd_path],
+            creationflags=CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)
+    except Exception:
+        pass
+
+
+def do_uninstall():
+    """Reverse an install: remove the Run key + Add/Remove entry, optionally the
+    settings, and self-delete the install dir. Invoked via `--uninstall` (the
+    Add/Remove button's UninstallString)."""
+    quiet = "--quiet" in sys.argv
+    if not quiet:
+        if _msgbox("Remove %s from this computer?" % APP_NAME,
+                   _MB_YESNO | _MB_ICONQUESTION) != _IDYES:
+            return
+    _set_run_key(False)
+    unregister_uninstall()
+    remove_settings = quiet
+    if not quiet:
+        remove_settings = _msgbox(
+            "Also remove your saved settings (server, thresholds)?",
+            _MB_YESNO | _MB_ICONQUESTION) == _IDYES
+    if remove_settings:
+        appdata_cfg = os.path.join(
+            os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
+        try:
+            shutil.rmtree(appdata_cfg)
+        except OSError:
+            pass
+    _schedule_self_delete()
+    if not quiet:
+        _msgbox("%s has been removed." % APP_NAME)
 
 
 # --------------------------------------------------------------- app state
@@ -897,8 +1112,8 @@ def on_toggle_logon(icon, item):
 
 
 def on_open_config_dir(icon, item):
-    # Opens Explorer right at the config folder. CONFIG_DIR lives under %APPDATA%
-    # for the packaged app, which is hidden by default and most users can't
+    # Opens Explorer right at the config folder. For the installed app CONFIG_DIR
+    # lives under %APPDATA%, which is hidden by default and most users can't
     # navigate to by hand -- but a direct open lands there regardless of the
     # hidden-files setting, so they never need to know the path.
     try:
@@ -907,32 +1122,68 @@ def on_open_config_dir(icon, item):
         pass
 
 
+def on_install(icon, item):
+    if do_install():
+        on_quit(icon, item)               # installed copy is launching; exit this one
+
+
+def on_uninstall(icon, item):
+    # Spawn a separate --uninstall invocation; it confirms, then its trampoline
+    # stops this tray and deletes the install dir.
+    try:
+        subprocess.Popen([INSTALL_EXE, "--uninstall"])
+    except Exception:
+        pass
+
+
 def build_menu():
     # Everything lives in the panel now; the native right-click menu is a minimal
-    # fallback (left-click opens the panel via the default item).
-    return pystray.Menu(
+    # fallback (left-click opens the panel via the default item). The startup and
+    # install/uninstall items depend on how the app is running.
+    items = [
         pystray.MenuItem("Open NTP Time Sync", on_show_panel, default=True),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Start at logon", on_toggle_logon,
-                         checked=lambda item: logon_enabled()),
+    ]
+    if IS_LOOSE:
+        items.append(pystray.MenuItem("Install NTP Time Sync…", on_install))
+    if IS_INSTALLED or not FROZEN:
+        # A loose or portable run must not pin the Run key to a Downloads/USB path.
+        items.append(pystray.MenuItem("Start at logon", on_toggle_logon,
+                                      checked=lambda item: logon_enabled()))
+    items += [
         pystray.MenuItem("Check for updates", on_check_updates),
         pystray.MenuItem("Auto-check on startup", on_toggle_autocheck,
                          checked=lambda item: state.cfg.get("auto_check_updates", False)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Open settings folder", on_open_config_dir),
-        pystray.MenuItem("Quit", on_quit),
-    )
+    ]
+    if IS_INSTALLED:
+        items.append(pystray.MenuItem("Uninstall…", on_uninstall))
+    items.append(pystray.MenuItem("Quit", on_quit))
+    return pystray.Menu(*items)
 
 
 def main():
+    if "--uninstall" in sys.argv[1:]:
+        do_uninstall()
+        return
+    if "--install" in sys.argv[1:]:
+        do_install()                  # silent install (no prompt); then relaunched
+        return
+
     _cleanup_old_update()
+
+    if IS_LOOSE:
+        # Bare exe (e.g. straight from Downloads): offer to install itself. If it
+        # installs, the installed copy is now launching, so this one bows out.
+        if offer_install():
+            return
+
+    if IS_INSTALLED:
+        reconcile_logon()             # keep the Run key valid and pointing here
+        refresh_uninstall_entry()     # keep the Add/Remove version current
+
     panel.start()
-    if FROZEN and not state.cfg.get("logon_initialized", False):
-        # Installed .exe only: running from source shouldn't quietly add the dev
-        # checkout to your startup. From source it stays opt-in via the menu.
-        set_logon(True)                       # default Start-at-logon ON, first run only
-        state.cfg["logon_initialized"] = True
-        save_config(state.cfg)
     state.icon = pystray.Icon(
         "ntp_time_sync", make_icon("gray"),
         "%s\nstarting..." % APP_NAME, build_menu())

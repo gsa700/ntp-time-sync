@@ -45,6 +45,38 @@ if (-not (Test-Path $built)) { throw "Build failed: $built not found" }
 $mb = [math]::Round((Get-Item $built).Length / 1MB, 1)
 Write-Host "==> Built $built ($mb MB)" -ForegroundColor Green
 
+# Also emit the release-named exe fresh every build. PyInstaller names the file
+# "NTP Time Sync.exe"; the release asset is "NTP-Time-Sync.exe". Producing it here
+# (rather than a manual copy at release time) means it's never a stale leftover.
+$release = Join-Path $root "dist\NTP-Time-Sync.exe"
+Copy-Item $built $release -Force
+
+# Portable edition: exe + marker + example config + README, zipped. The marker
+# file makes the app run in place -- config beside the exe, no install, no Run
+# key, no Add/Remove entry -- so it runs from a USB stick and leaves no trace.
+Write-Host "==> Packaging portable zip" -ForegroundColor Cyan
+$portDir = Join-Path $root "dist\portable"
+Remove-Item $portDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $portDir | Out-Null
+Copy-Item $built (Join-Path $portDir "NTP-Time-Sync.exe") -Force
+$marker = @"
+This file marks NTP Time Sync as portable.
+
+While portable.txt sits next to NTP-Time-Sync.exe, the app keeps its settings in
+this folder (config.json), never installs itself, and adds nothing to Windows --
+no Start-at-logon entry, no Add/Remove Programs listing. Run it from anywhere,
+including a USB stick, and it leaves no trace.
+
+Delete this file if you want the exe to install itself normally instead.
+"@
+Set-Content -Path (Join-Path $portDir "portable.txt") -Value $marker -Encoding utf8
+Copy-Item (Join-Path $root "config.example.json") $portDir -Force
+Copy-Item (Join-Path $root "README.md") $portDir -Force
+$zip = Join-Path $root "dist\NTP-Time-Sync-portable.zip"
+Remove-Item $zip -Force -ErrorAction SilentlyContinue
+Compress-Archive -Path (Join-Path $portDir '*') -DestinationPath $zip -Force
+Write-Host "==> Built $zip" -ForegroundColor Green
+
 if ($NoDeploy) { Write-Host "==> -NoDeploy set; skipping install." ; return }
 
 # Deploy over the copy that is actually installed, not a hardcoded guess: the
