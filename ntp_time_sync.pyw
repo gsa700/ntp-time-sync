@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.14"
+APP_VERSION = "1.3.15"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -1163,6 +1163,39 @@ def build_menu():
     return pystray.Menu(*items)
 
 
+def _wait_for_shell(timeout=90):
+    """Block until the taskbar's notification area exists.
+
+    A Run-key app launched at logon can start before Explorer has created the
+    tray. Adding an icon then fails silently and the app exits with no dot --
+    which is why it worked on a manual launch but not at logon. Waiting for
+    Shell_TrayWnd closes that race. No-op once the shell is up (manual launch).
+    """
+    try:
+        find = ctypes.windll.user32.FindWindowW
+    except Exception:
+        return
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if find("Shell_TrayWnd", None):
+            return
+        time.sleep(1)
+
+
+def _log_startup_error():
+    """Append a traceback to CONFIG_DIR so a silent windowed-app crash at logon
+    leaves evidence instead of just vanishing."""
+    import traceback
+    try:
+        with open(os.path.join(CONFIG_DIR, "startup-error.log"), "a",
+                  encoding="utf-8") as f:
+            f.write("---- %s (v%s) ----\n" % (dt.datetime.now().isoformat(), APP_VERSION))
+            f.write(traceback.format_exc())
+            f.write("\n")
+    except Exception:
+        pass
+
+
 def main():
     if "--uninstall" in sys.argv[1:]:
         do_uninstall()
@@ -1184,14 +1217,18 @@ def main():
         refresh_uninstall_entry()     # keep the Add/Remove version current
 
     panel.start()
-    state.icon = pystray.Icon(
-        "ntp_time_sync", make_icon("gray"),
-        "%s\nstarting..." % APP_NAME, build_menu())
     threading.Thread(target=poll_loop, daemon=True).start()
     if state.cfg.get("auto_check_updates", False):
         threading.Thread(target=_startup_autocheck, daemon=True).start()
+    _wait_for_shell()                 # at logon the tray may not exist yet
+    state.icon = pystray.Icon(
+        "ntp_time_sync", make_icon(state.color), state.tooltip(), build_menu())
     state.icon.run()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _log_startup_error()
+        raise
