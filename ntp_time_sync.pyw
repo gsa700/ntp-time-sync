@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.17"
+APP_VERSION = "1.3.18"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -643,24 +643,32 @@ def offer_install():
     return False
 
 
-def _schedule_self_delete():
+def _schedule_self_delete(remove_settings=False):
     """A running exe can't delete itself; hand off to a detached batch that waits
-    for us to exit, kills any lingering tray instance, removes the install dir,
-    then deletes itself."""
+    for us to exit, kills any lingering tray instance, then removes everything.
+
+    All destructive cleanup happens HERE, not in-process: while the app -- or the
+    Windows Settings uninstaller -- is still alive it can hold the Add/Remove key
+    or a settings file open, and the in-process delete then silently fails
+    (orphaning a ghost Add/Remove entry, or leaving settings behind). A separate
+    process, after everyone has exited, gets them."""
+    lines = [
+        "@echo off",
+        "ping 127.0.0.1 -n 3 >nul",                         # ~2s: let us exit
+        'taskkill /f /im "NTP-Time-Sync.exe" >nul 2>&1',    # stop the tray
+        "ping 127.0.0.1 -n 2 >nul",
+        'reg delete "HKCU\\%s" /f >nul 2>&1' % ARP_KEY,     # Add/Remove entry
+    ]
+    if remove_settings:
+        cfg_dir = os.path.join(
+            os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
+        lines.append('rmdir /s /q "%s" >nul 2>&1' % cfg_dir)
+    lines += [
+        'rmdir /s /q "%s" >nul 2>&1' % INSTALL_DIR,         # install dir
+        'del /q "%~f0" >nul 2>&1',                          # this script
+    ]
+    script = "\r\n".join(lines) + "\r\n"
     cmd_path = os.path.join(tempfile.gettempdir(), "ntp_uninstall.cmd")
-    script = (
-        "@echo off\r\n"
-        "ping 127.0.0.1 -n 3 >nul\r\n"                       # ~2s: let us exit
-        'taskkill /f /im "NTP-Time-Sync.exe" >nul 2>&1\r\n'  # stop the tray
-        "ping 127.0.0.1 -n 2 >nul\r\n"
-        # Delete the Add/Remove entry from here, not in-process: when uninstall is
-        # launched from Windows Settings, that app holds the Uninstall key open and
-        # the in-process delete can silently fail, orphaning a ghost entry that
-        # points at a now-deleted exe. A separate process after we exit gets it.
-        'reg delete "HKCU\\%s" /f >nul 2>&1\r\n'
-        'rmdir /s /q "%s" >nul 2>&1\r\n'
-        'del /q "%%~f0" >nul 2>&1\r\n'
-    ) % (ARP_KEY, INSTALL_DIR)
     try:
         with open(cmd_path, "w", encoding="ascii") as f:
             f.write(script)
@@ -688,14 +696,7 @@ def do_uninstall():
         remove_settings = _msgbox(
             "Also remove your saved settings (server, thresholds)?",
             _MB_YESNO | _MB_ICONQUESTION) == _IDYES
-    if remove_settings:
-        appdata_cfg = os.path.join(
-            os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
-        try:
-            shutil.rmtree(appdata_cfg)
-        except OSError:
-            pass
-    _schedule_self_delete()
+    _schedule_self_delete(remove_settings)
     if not quiet:
         _msgbox("%s has been removed." % APP_NAME)
 
