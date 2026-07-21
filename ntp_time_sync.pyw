@@ -896,6 +896,17 @@ def on_toggle_logon(icon, item):
     set_logon(not logon_enabled())
 
 
+def on_open_config_dir(icon, item):
+    # Opens Explorer right at the config folder. CONFIG_DIR lives under %APPDATA%
+    # for the packaged app, which is hidden by default and most users can't
+    # navigate to by hand -- but a direct open lands there regardless of the
+    # hidden-files setting, so they never need to know the path.
+    try:
+        os.startfile(CONFIG_DIR)          # noqa: S606 - Windows-only, trusted path
+    except Exception:
+        pass
+
+
 def build_menu():
     # Everything lives in the panel now; the native right-click menu is a minimal
     # fallback (left-click opens the panel via the default item).
@@ -908,6 +919,7 @@ def build_menu():
         pystray.MenuItem("Auto-check on startup", on_toggle_autocheck,
                          checked=lambda item: state.cfg.get("auto_check_updates", False)),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Open settings folder", on_open_config_dir),
         pystray.MenuItem("Quit", on_quit),
     )
 

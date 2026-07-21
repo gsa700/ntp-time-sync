@@ -27,7 +27,8 @@ A single self-contained executable — **no Python, no installer, no dependencie
 4. If no dot appears, see [Make the icon visible](#make-the-icon-visible-windows-11) below.
 5. **Start at logon** is on by default; change it (and update checks) from the right-click menu.
 
-First run creates its settings at `%APPDATA%\NTP Time Sync\config.json`.
+That's it. Settings are created automatically on first run; to find or edit them later,
+right-click the tray icon and choose **Open settings folder**.
 
 ## Make the icon visible (Windows 11)
 
@@ -75,7 +76,8 @@ header over the live readout, with every action one click away:
 - **Close**
 
 **Right-click** the dot for the rest: **Start at logon** (on by default),
-**Check for updates**, **Auto-check on startup** (off by default), and **Quit**.
+**Check for updates**, **Auto-check on startup** (off by default),
+**Open settings folder**, and **Quit**.
 
 When a newer release exists, **Check for updates** offers to **download and install
 it in place**, then asks to **Restart now** to finish (or choose No — it also starts
@@ -151,9 +153,9 @@ while it's stopped, which is why **Resync** starts the service before resyncing.
 
 ## Configure
 
-Settings live in `config.json` — in `%APPDATA%\NTP Time Sync\` for the packaged
-`.exe`, or next to the script when run from source. Created on first run with these
-defaults:
+Settings live in a `config.json` file. You don't need to hunt for it — right-click the
+tray icon and choose **Open settings folder** to open it in Explorer (it's created on
+first run). Its defaults:
 
 ```json
 {
@@ -188,7 +190,9 @@ defaults:
 
 The file also stores an internal `logon_initialized` flag (managed automatically — leave it).
 
-Edit and restart, or use **Configure server…** to change the server from the UI.
+To change a setting: **Open settings folder**, edit `config.json`, and restart the app.
+To change just the server, the **Configure…** button in the panel does it from the UI —
+no file editing.
 
 ## How it works
 
