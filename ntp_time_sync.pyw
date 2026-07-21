@@ -1184,15 +1184,6 @@ def on_install(icon, item):
         on_quit(icon, item)               # installed copy is launching; exit this one
 
 
-def on_uninstall(icon, item):
-    # Spawn a separate --uninstall invocation; it confirms, then its trampoline
-    # stops this tray and deletes the install dir.
-    try:
-        subprocess.Popen([INSTALL_EXE, "--uninstall"])
-    except Exception:
-        pass
-
-
 def build_menu():
     # Everything lives in the panel now; the native right-click menu is a minimal
     # fallback (left-click opens the panel via the default item). The startup and
@@ -1214,8 +1205,6 @@ def build_menu():
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Open settings folder", on_open_config_dir),
     ]
-    if IS_INSTALLED:
-        items.append(pystray.MenuItem("Uninstall…", on_uninstall))
     items.append(pystray.MenuItem("Quit", on_quit))
     return pystray.Menu(*items)
 

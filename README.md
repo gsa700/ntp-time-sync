@@ -31,7 +31,7 @@ A single self-contained executable — **no Python, no dependencies.**
 
 That's it. Settings are created automatically; to find or edit them later, right-click the
 tray icon and choose **Open settings folder**. To remove the app, use **Uninstall** in
-Windows' *Installed apps* (or the tray menu).
+Windows' *Installed apps*.
 
 ### Portable edition (run from anywhere)
 
@@ -91,8 +91,8 @@ header over the live readout, with every action one click away:
 
 **Right-click** the dot for the rest: **Start at logon** (on by default),
 **Check for updates**, **Auto-check on startup** (off by default),
-**Open settings folder**, and **Quit**. An installed copy also shows **Uninstall…**;
-a loose (not-yet-installed) copy shows **Install NTP Time Sync…** instead.
+**Open settings folder**, and **Quit**. A loose (not-yet-installed) copy also shows
+**Install NTP Time Sync…**.
 
 When a newer release exists, **Check for updates** offers to **download and install
 it in place**, then asks to **Restart now** to finish (or choose No — it also starts
