@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.16"
+APP_VERSION = "1.3.17"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -653,9 +653,14 @@ def _schedule_self_delete():
         "ping 127.0.0.1 -n 3 >nul\r\n"                       # ~2s: let us exit
         'taskkill /f /im "NTP-Time-Sync.exe" >nul 2>&1\r\n'  # stop the tray
         "ping 127.0.0.1 -n 2 >nul\r\n"
+        # Delete the Add/Remove entry from here, not in-process: when uninstall is
+        # launched from Windows Settings, that app holds the Uninstall key open and
+        # the in-process delete can silently fail, orphaning a ghost entry that
+        # points at a now-deleted exe. A separate process after we exit gets it.
+        'reg delete "HKCU\\%s" /f >nul 2>&1\r\n'
         'rmdir /s /q "%s" >nul 2>&1\r\n'
         'del /q "%%~f0" >nul 2>&1\r\n'
-    ) % INSTALL_DIR
+    ) % (ARP_KEY, INSTALL_DIR)
     try:
         with open(cmd_path, "w", encoding="ascii") as f:
             f.write(script)
