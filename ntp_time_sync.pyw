@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.13"
+APP_VERSION = "1.3.14"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
