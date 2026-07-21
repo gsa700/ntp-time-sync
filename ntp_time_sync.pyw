@@ -1174,12 +1174,24 @@ def _wait_for_shell(timeout=90):
     try:
         find = ctypes.windll.user32.FindWindowW
     except Exception:
-        return
+        return False
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if find("Shell_TrayWnd", None):
-            return
+            return True
         time.sleep(1)
+    return False
+
+
+def _startup_log(msg):
+    """Append a timestamped breadcrumb to CONFIG_DIR. Unconditional (not just on
+    error) so a logon start that produces no dot can be traced: whether main()
+    ran at all, whether the shell was ready, and whether the tray loop exited."""
+    try:
+        with open(os.path.join(CONFIG_DIR, "startup.log"), "a", encoding="utf-8") as f:
+            f.write("%s  %s\n" % (dt.datetime.now().strftime("%m-%d %H:%M:%S"), msg))
+    except Exception:
+        pass
 
 
 def _log_startup_error():
@@ -1204,6 +1216,8 @@ def main():
         do_install()                  # silent install (no prompt); then relaunched
         return
 
+    _startup_log("main start: INSTALLED=%s LOOSE=%s PORTABLE=%s exe=%s"
+                 % (IS_INSTALLED, IS_LOOSE, IS_PORTABLE, sys.executable))
     _cleanup_old_update()
 
     if IS_LOOSE:
@@ -1220,10 +1234,27 @@ def main():
     threading.Thread(target=poll_loop, daemon=True).start()
     if state.cfg.get("auto_check_updates", False):
         threading.Thread(target=_startup_autocheck, daemon=True).start()
-    _wait_for_shell()                 # at logon the tray may not exist yet
-    state.icon = pystray.Icon(
-        "ntp_time_sync", make_icon(state.color), state.tooltip(), build_menu())
-    state.icon.run()
+
+    # At logon the notification area may not exist yet (or may not accept the
+    # icon on the first try). Wait for the shell, then create the icon; if
+    # pystray's loop returns without us asking to quit, the add likely failed --
+    # rebuild and retry a few times rather than exit dot-less.
+    _startup_log("shell ready=%s" % _wait_for_shell())
+    for attempt in range(1, 6):
+        state.icon = pystray.Icon(
+            "ntp_time_sync", make_icon(state.color), state.tooltip(), build_menu())
+        _startup_log("tray attempt %d -> run()" % attempt)
+        try:
+            state.icon.run()
+        except Exception:
+            _log_startup_error()
+            _startup_log("tray attempt %d raised" % attempt)
+        if state.stop.is_set():
+            _startup_log("quit requested; exiting")
+            return
+        _startup_log("run() returned without quit; retrying in 3s")
+        time.sleep(3)
+    _startup_log("gave up after 5 tray attempts")
 
 
 if __name__ == "__main__":
