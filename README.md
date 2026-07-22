@@ -88,7 +88,8 @@ header over the live readout, with every action one click away:
   opens an elevated PowerShell (UAC)
 - **Start service (admin)** — appears only when the Windows Time service is stopped;
   offers to also set it to start at boot (see below)
-- **Configure… (admin)** — change the NTP server, then applies it elevated (UAC)
+- **Configure… (admin)** — change the NTP server; applies it elevated (UAC) and sets
+  Windows Time to start automatically, so it keeps syncing across reboots
 - **Open time.is** — browser sanity check
 - **Close**
 

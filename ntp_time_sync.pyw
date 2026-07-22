@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.19"
+APP_VERSION = "1.3.20"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -415,7 +415,11 @@ def action_start_service(set_automatic=False):
 
 
 def action_configure_apply(server):
+    # Also set Automatic start: pointing Windows at a time server means you want
+    # it to keep syncing, and a fresh/reset w32time is trigger-start, so it would
+    # otherwise stop again after a reboot. Free -- this already runs elevated.
     ps = ("w32tm /config /manualpeerlist:'%s,0x8' /syncfromflags:manual /update; "
+          "Set-Service w32time -StartupType Automatic; "
           "Restart-Service w32time; "
           "w32tm /resync /force; "
           "w32tm /query /status" % server)
@@ -1005,7 +1009,8 @@ class StatusPanel:
                 state.server = new
             if messagebox.askyesno(
                     APP_NAME,
-                    "Point Windows time service at %s now?\n\n"
+                    "Point Windows time service at %s and start it automatically "
+                    "at boot?\n\n"
                     "Needs administrator rights - a UAC prompt will appear." % new,
                     parent=self.win):
                 action_configure_apply(new)
