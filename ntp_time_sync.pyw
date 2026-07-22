@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.18"
+APP_VERSION = "1.3.19"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -422,6 +422,55 @@ def action_configure_apply(server):
     run_elevated_ps(ps)
 
 
+def read_w32time_state():
+    """Snapshot the Windows Time config so uninstall can restore it. Reads the
+    server/type from the registry and the service start-type/running state --
+    all read-only, no elevation. Returns a dict, or None if unreadable."""
+    import winreg
+    st = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Services\W32Time\Parameters") as k:
+            st["ntpserver"] = winreg.QueryValueEx(k, "NtpServer")[0]
+            st["type"] = winreg.QueryValueEx(k, "Type")[0]
+    except OSError:
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Services\W32Time") as k:
+            start = winreg.QueryValueEx(k, "Start")[0]
+        st["start"] = {2: "Automatic", 3: "Manual", 4: "Disabled"}.get(start, "Manual")
+    except OSError:
+        st["start"] = "Manual"
+    st["running"] = service_running() is True
+    return st
+
+
+def restore_w32time(b):
+    """Put Windows Time back to a snapshot from read_w32time_state (elevated,
+    hidden, one UAC prompt). Fire-and-forget: the restore runs independently of
+    the rest of uninstall."""
+    t = (b.get("type") or "NTP")
+    cmds = []
+    if t == "NT5DS":
+        cmds.append("w32tm /config /update /syncfromflags:domhier")
+    elif t == "NoSync":
+        cmds.append("w32tm /config /update /syncfromflags:no")
+    else:
+        peers = b.get("ntpserver") or "time.windows.com,0x9"
+        cmds.append("w32tm /config /update /syncfromflags:manual /manualpeerlist:'%s'" % peers)
+    cmds.append("Set-Service w32time -StartupType %s" % (b.get("start") or "Manual"))
+    if b.get("running"):
+        cmds.append("Start-Service w32time; w32tm /resync /force")
+    else:
+        cmds.append("Stop-Service w32time -ErrorAction SilentlyContinue")
+    params = '-NoProfile -WindowStyle Hidden -Command "%s"' % "; ".join(cmds)
+    try:
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", "powershell.exe", params, None, 0)
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------- start at logon
 #
 # Autostart uses a Startup-folder shortcut, not a Run-key value. On a real
@@ -606,6 +655,9 @@ def do_install():
         return False
     try:
         state.cfg["start_at_logon"] = True
+        baseline = read_w32time_state()    # snapshot for opt-in restore on uninstall
+        if baseline:
+            state.cfg["w32time_baseline"] = baseline
         save_config(state.cfg)
         _set_run_key(False)                # ensure no legacy Run-key value lingers
         _write_shortcut(INSTALL_EXE)       # autostart points at the installed copy
@@ -696,6 +748,14 @@ def do_uninstall():
         remove_settings = _msgbox(
             "Also remove your saved settings (server, thresholds)?",
             _MB_YESNO | _MB_ICONQUESTION) == _IDYES
+        baseline = state.cfg.get("w32time_baseline")
+        if baseline and _msgbox(
+                "Restore Windows Time to how it was before %s was installed?\n\n"
+                "If it wasn't syncing before, this will stop it syncing again.\n"
+                "Choose No to leave your current time settings untouched.\n\n"
+                "Needs administrator rights - a UAC prompt will appear." % APP_NAME,
+                _MB_YESNO | _MB_ICONQUESTION) == _IDYES:
+            restore_w32time(baseline)
     _schedule_self_delete(remove_settings)
     if not quiet:
         _msgbox("%s has been removed." % APP_NAME)

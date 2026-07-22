@@ -31,7 +31,10 @@ A single self-contained executable — **no Python, no dependencies.**
 
 That's it. Settings are created automatically; to find or edit them later, right-click the
 tray icon and choose **Open settings folder**. To remove the app, use **Uninstall** in
-Windows' *Installed apps*.
+Windows' *Installed apps*. Uninstall asks whether to also delete your settings, and — if the
+app changed your Windows Time configuration — whether to **restore it to how it was before
+the app was installed** (your choice; declining leaves your current, working time settings
+untouched).
 
 ### Portable edition (run from anywhere)
 
