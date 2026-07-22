@@ -30,11 +30,8 @@ A single self-contained executable — **no Python, no dependencies.**
    [Make the icon visible](#make-the-icon-visible-windows-11) below.
 
 That's it. Settings are created automatically; to find or edit them later, right-click the
-tray icon and choose **Open settings folder**. To remove the app, use **Uninstall** in
-Windows' *Installed apps*. Uninstall asks whether to also delete your settings, and — if the
-app changed your Windows Time configuration — whether to **restore it to how it was before
-the app was installed** (your choice; declining leaves your current, working time settings
-untouched).
+tray icon and choose **Open settings folder**. To remove the app, see [Uninstall](#uninstall)
+below — it can also put your Windows Time settings back the way they were.
 
 ### Portable edition (run from anywhere)
 
@@ -105,6 +102,24 @@ at your next sign-in). No manual re-download; no admin needed. Auto-check only
 
 Polling is read-only and runs **non-elevated**; only Resync and Configure raise
 a UAC prompt on demand.
+
+## Uninstall
+
+Remove it the normal way — **Settings → Apps → Installed apps → NTP Time Sync →
+Uninstall** (or **Uninstall…** in the tray right-click menu). It clears its
+Start-at-logon shortcut and *Installed apps* entry, then asks two things:
+
+- **"Also remove your saved settings?"** — **Yes** deletes your `config.json` (server,
+  thresholds); **No** keeps it, so a later reinstall picks up where you left off.
+- **"Restore Windows Time to how it was before the app was installed?"** — if the app
+  ever changed your Windows Time setup (via **Configure** or **Start service**), it
+  snapshotted the previous state at install time and can put it back: reference server,
+  sync type, and start mode. Needs a UAC prompt. Choose **No** to leave your current,
+  working time settings alone — sensible if the app fixed a clock that wasn't syncing
+  before and you'd rather keep it that way.
+
+The **portable** edition installs nothing, so there's nothing to uninstall — just delete
+its folder and it's gone without a trace.
 
 ## Run from source (developers)
 
@@ -215,8 +230,11 @@ first run). Its defaults:
   told when Windows isn't using it.
 
 `start_at_logon` records whether you want the app to start at logon (toggle it from
-the tray menu, not by hand); the installed copy keeps the Windows startup entry in
-step with it on every launch.
+the tray menu, not by hand); the installed copy keeps its Startup-folder shortcut in
+step with it on every launch. `w32time_baseline`, written once at install, snapshots
+your Windows Time configuration from just before the app first changed it, so
+[uninstall](#uninstall) can offer to restore it — both are managed automatically, leave
+them.
 
 To change a setting: **Open settings folder**, edit `config.json`, and restart the app.
 To change just the server, the **Configure…** button in the panel does it from the UI —
