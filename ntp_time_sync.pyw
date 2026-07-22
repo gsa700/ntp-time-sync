@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.20"
+APP_VERSION = "1.3.21"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -713,7 +713,21 @@ def _schedule_self_delete(remove_settings=False):
         "ping 127.0.0.1 -n 3 >nul",                         # ~2s: let us exit
         'taskkill /f /im "NTP-Time-Sync.exe" >nul 2>&1',    # stop the tray
         "ping 127.0.0.1 -n 2 >nul",
-        'reg delete "HKCU\\%s" /f >nul 2>&1' % ARP_KEY,     # Add/Remove entry
+        # Retry the Add/Remove-entry delete until it actually sticks. Launched
+        # from the Settings app, uninstall runs while that app holds the Uninstall
+        # key open -- a registry lock (not a file lock), which is why the install
+        # dir deletes but a single reg delete loses the race and orphans a ghost
+        # entry. Loop until the key is gone (reg query returns 1), ~40s max.
+        "set /a _n=0",
+        ":ntp_delarp",
+        'reg delete "HKCU\\%s" /f >nul 2>&1' % ARP_KEY,
+        'reg query "HKCU\\%s" >nul 2>&1' % ARP_KEY,
+        "if errorlevel 1 goto ntp_arpdone",
+        "set /a _n+=1",
+        "if %_n% geq 20 goto ntp_arpdone",
+        "ping 127.0.0.1 -n 3 >nul",
+        "goto ntp_delarp",
+        ":ntp_arpdone",
     ]
     if remove_settings:
         cfg_dir = os.path.join(
