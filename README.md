@@ -12,7 +12,7 @@ no numbers to read — just a dot by the clock.
 > problem. This app makes that failure visible at a glance — but it's useful to
 > anyone who depends on an accurate Windows clock.
 
-## Download (recommended)
+## Download
 
 A single self-contained executable — **no Python, no dependencies.**
 
