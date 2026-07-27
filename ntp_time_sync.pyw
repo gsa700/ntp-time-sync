@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.21"
+APP_VERSION = "1.3.22"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -811,15 +811,32 @@ class State:
 state = State()
 
 
+def _log_exc(logname):
+    """Append a traceback to CONFIG_DIR so a rare runtime failure leaves a trail."""
+    import traceback
+    try:
+        with open(os.path.join(CONFIG_DIR, logname), "a", encoding="utf-8") as f:
+            f.write("---- %s (v%s) ----\n%s\n"
+                    % (dt.datetime.now().isoformat(), APP_VERSION, traceback.format_exc()))
+    except Exception:
+        pass
+
+
 def refresh_once():
     try:
         state.apply(evaluate(state.cfg))
     except Exception as e:
         state.color, state.reason = "gray", "error: %s" % e
     if state.icon is not None:
-        state.icon.icon = make_icon(state.color)
-        state.icon.title = state.tooltip()
-        state.icon.update_menu()
+        try:
+            state.icon.icon = make_icon(state.color)
+            state.icon.title = state.tooltip()
+            state.icon.update_menu()
+        except Exception:
+            # A transient tray-update failure (Explorer restarted, shell busy,
+            # a Shell_NotifyIcon hiccup) must not propagate -- unguarded it would
+            # kill the poll thread and freeze the dot until the app restarts.
+            pass
     try:
         panel.refresh()
     except Exception:
@@ -827,8 +844,15 @@ def refresh_once():
 
 
 def poll_loop():
+    # Runs in a daemon thread. If any exception ever escaped this loop it would
+    # end silently and the app would stop refreshing entirely -- the dot frozen
+    # at its last value until the app is restarted (the "stops updating for long
+    # stretches" report). Guard every iteration so the loop can never die.
     while not state.stop.is_set():
-        refresh_once()
+        try:
+            refresh_once()
+        except Exception:
+            _log_exc("poll-error.log")
         state.stop.wait(state.cfg["poll_seconds"])
 
 
