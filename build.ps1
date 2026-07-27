@@ -79,24 +79,14 @@ Write-Host "==> Built $zip" -ForegroundColor Green
 
 if ($NoDeploy) { Write-Host "==> -NoDeploy set; skipping install." ; return }
 
-# Deploy over the copy that is actually installed, not a hardcoded guess: the
-# exe may sit anywhere the user put it, and the Start-at-logon entry points at
-# that path. Writing to the recommended folder regardless would leave a second
-# install behind and a logon entry still aimed at the old one.
-$dest = $null
-$run = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
-    -Name NtpTimeSync -ErrorAction SilentlyContinue
-if ($run) {
-    $candidate = $run.NtpTimeSync.Trim('"')
-    # Ignore a dev-checkout entry (pythonw + script); only follow a real exe.
-    if ($candidate -like "*.exe" -and $candidate -notlike "*pythonw*") { $dest = $candidate }
-}
-if ($dest) {
-    Write-Host "==> Existing install: $dest" -ForegroundColor DarkGray
-} else {
-    $dest = Join-Path $env:LOCALAPPDATA "Programs\NTP Time Sync\NTP-Time-Sync.exe"
-    Write-Host "==> No install found; using default: $dest" -ForegroundColor DarkGray
-}
+# Deploy to the canonical per-user install location. Since v1.3.16 the app always
+# installs itself to this fixed path (the earlier "put the exe wherever you like"
+# behavior is gone), and autostart is a Startup-folder shortcut that the relaunched
+# copy reconciles to this path on launch. So this is always the right target --
+# whether or not a copy is already installed. (Older builds keyed off an HKCU Run
+# value that no longer exists, so that detection always fell through to here anyway.)
+$dest = Join-Path $env:LOCALAPPDATA "Programs\NTP Time Sync\NTP-Time-Sync.exe"
+Write-Host "==> Deploy target: $dest" -ForegroundColor DarkGray
 
 Write-Host "==> Stopping running instances" -ForegroundColor Cyan
 Get-CimInstance Win32_Process | Where-Object { $_.Name -match "NTP.?Time.?Sync" } |
