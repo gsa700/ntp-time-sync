@@ -4,6 +4,10 @@ config.json
 # Scratch release notes for `gh release create --notes-file`
 notes.md
 
+# Runtime logs (dev runs write them next to the script)
+hang-stacks.log
+startup.log
+
 # Python
 __pycache__/
 *.py[cod]

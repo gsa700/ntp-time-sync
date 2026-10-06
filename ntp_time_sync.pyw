@@ -50,7 +50,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.22"
+APP_VERSION = "1.3.23"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -848,11 +848,40 @@ def poll_loop():
     # end silently and the app would stop refreshing entirely -- the dot frozen
     # at its last value until the app is restarted (the "stops updating for long
     # stretches" report). Guard every iteration so the loop can never die.
+    #
+    # Hang watchdog: dump_traceback_later fires from a C-level thread inside
+    # CPython that needs no GIL, so it can dump every thread's stack even while
+    # the process is deadlocked (the Aug 2026 AppHang episodes left no evidence
+    # precisely because nothing in-process could still run). Re-armed after each
+    # poll; if this thread wedges for 180 s, all-thread stacks land in
+    # hang-stacks.log every 180 s for as long as the hang lasts. Rotated at
+    # arming time so repeat episodes can't grow the file without bound.
+    import faulthandler
+    fh_file = None
+    try:
+        fh_path = os.path.join(CONFIG_DIR, "hang-stacks.log")
+        try:
+            if os.path.getsize(fh_path) > 5_000_000:
+                os.remove(fh_path)
+        except OSError:
+            pass
+        fh_file = open(fh_path, "a")
+        fh_file.write("\n==== armed %s (v%s, pid %d) ====\n"
+                      % (dt.datetime.now().isoformat(), APP_VERSION, os.getpid()))
+        fh_file.flush()
+        faulthandler.dump_traceback_later(180, repeat=True, file=fh_file)
+    except Exception:
+        fh_file = None
     while not state.stop.is_set():
         try:
             refresh_once()
         except Exception:
             _log_exc("poll-error.log")
+        if fh_file is not None:
+            try:
+                faulthandler.dump_traceback_later(180, repeat=True, file=fh_file)
+            except Exception:
+                pass
         state.stop.wait(state.cfg["poll_seconds"])
 
 
