@@ -52,7 +52,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.24"
+APP_VERSION = "1.3.25"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -1233,10 +1233,8 @@ def self_update(url, latest):
     Windows lets you rename a running .exe (just not overwrite it), so we rename
     the current exe aside and drop the freshly-downloaded one into its place.
 
-    We do NOT relaunch here. Launching a just-written onefile exe races with
-    antivirus scanning it, which reliably produces "failed to load Python DLL".
-    On success we report "installed" and let the user opt into a restart (see
-    _relaunch, which forces the AV scan to finish first). The app also starts at
+    We do NOT relaunch here. On success we report "installed" and let the user
+    opt into a restart (see _relaunch). The app also starts at
     logon. The leftover .old.exe is cleaned up on next startup.
     """
     import urllib.request
@@ -1281,10 +1279,21 @@ def _relaunch():
     """Robustly relaunch the freshly-updated exe (only when the user opts in).
 
     Waits for THIS process to exit (so the onefile temp dir is cleaned up), then
-    reads the new exe end-to-end so antivirus finishes scanning it BEFORE launch
-    (that scan race is what broke the earlier auto-restarts), then launches it.
+    reads the new exe end-to-end so antivirus finishes scanning it BEFORE launch,
+    then launches it.
+
+    The relauncher must NOT inherit this process's PyInstaller environment. A
+    onefile exe that finds the parent's _PYI_* variables treats itself as that
+    parent's child and loads Python from the parent's _MEI temp dir, which is
+    gone by then: "Failed to load Python DLL", naming an _MEIxxxx folder.
+    That, not antivirus, is what broke every restart after an update.
+    PYINSTALLER_RESET_ENVIRONMENT=1 is PyInstaller's switch (6.9+) for starting
+    another onefile program as an independent process.
     """
     exe = sys.executable
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith(("_PYI_", "_MEIPASS"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     try:
         ps = ("$ErrorActionPreference='SilentlyContinue';"
               "Wait-Process -Id %d -Timeout 30;"
@@ -1293,7 +1302,7 @@ def _relaunch():
               "Start-Process -FilePath '%s'") % (os.getpid(), exe, exe)
         subprocess.Popen(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
-            creationflags=0x08000000)  # CREATE_NO_WINDOW
+            env=env, creationflags=0x08000000)  # CREATE_NO_WINDOW
     except Exception:
         pass
 
