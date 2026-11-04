@@ -5,6 +5,8 @@ Tri-color light:
   GREEN  - synced to the configured NTP server and |offset| < green_max
   YELLOW - synced but drifting (green_max..yellow_max) or last sync is stale
   RED    - wrong source / not synced / |offset| > yellow_max / server unreachable
+  GRAY   - starting up: in the first boot_grace_minutes after Windows starts,
+           Windows Time not running or not synced yet (it starts a little late)
 
 Motivating use case: FT8/FT4 digital modes (WSJT-X) need the PC clock within
 about 1 second of UTC or nothing decodes, even with strong signals. This puts
@@ -50,7 +52,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.23"
+APP_VERSION = "1.3.24"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -109,6 +111,7 @@ DEFAULTS = {
     "green_max_offset": 1.0,    # abs seconds - FT8 needs < ~1s
     "yellow_max_offset": 2.0,   # abs seconds
     "stale_minutes": 40,        # last sync older than this -> not green
+    "boot_grace_minutes": 5,    # after a boot, gray (not yellow) while w32time starts
     "dns_cache_minutes": 30,    # reuse the resolved IP this long (0 = resolve every poll)
     "auto_check_updates": False,  # check GitHub for a newer release at startup
     "start_at_logon": True,       # desired startup state; the installed copy keeps
@@ -250,6 +253,16 @@ def service_autostart():
         return None
 
 
+def uptime_seconds():
+    """Seconds since Windows started (GetTickCount64), or None if unknown."""
+    try:
+        f = ctypes.windll.kernel32.GetTickCount64
+        f.restype = ctypes.c_ulonglong
+        return f() / 1000.0
+    except Exception:
+        return None
+
+
 def query_status():
     out = {"source": None, "last_sync": None, "stratum": None}
     try:
@@ -320,6 +333,14 @@ def evaluate(cfg):
     else:
         stale = True
 
+    up = uptime_seconds()
+    booting = up is not None and up < cfg.get("boot_grace_minutes", 5) * 60
+    # Not running or not synced yet, with nothing to say it won't be soon:
+    # a service set to Manual or Disabled will not start by itself, so that
+    # still warns at once.
+    not_yet = ((svc_up is False and service_autostart() is not False)
+               or (svc_up is not False and (not_ntp or st["last_sync"] is None)))
+
     if not reachable or offset is None:
         color, reason = "red", "%s unreachable" % server
     else:
@@ -327,6 +348,11 @@ def evaluate(cfg):
         wrong = cfg.get("require_server", False) and bool(server) and server not in source
         if a >= cfg["yellow_max_offset"]:
             color, reason = "red", "offset %+.3f s" % offset
+        elif booting and not_yet:
+            # Windows starts w32time a minute or two after logon (later still in
+            # a VM), so the first polls after a boot would warn about a service
+            # that is about to start. Wait out the grace period before saying so.
+            color, reason = "gray", "Windows Time starting after boot..."
         elif svc_up is False:
             # Checked before the CMOS case: with the service stopped the source
             # is empty for a different reason, and the fix is a different button.
@@ -361,6 +387,7 @@ def evaluate(cfg):
         "color": color, "reason": reason, "server": server,
         "offset_txt": offset_txt, "source": source_txt,
         "lastsync_txt": lastsync_txt, "svc_up": svc_up,
+        "svc_starting": color == "gray",
     }
 
 
@@ -791,6 +818,7 @@ class State:
         self.source = "..."
         self.lastsync_txt = "..."
         self.svc_up = None
+        self.svc_starting = False
         self.icon = None
         self.stop = threading.Event()
 
@@ -802,6 +830,7 @@ class State:
         self.source = fields["source"]
         self.lastsync_txt = fields["lastsync_txt"]
         self.svc_up = fields.get("svc_up")
+        self.svc_starting = fields.get("svc_starting", False)
 
     def tooltip(self):
         return "%s v%s\n%s  %s\n%s" % (
@@ -1149,7 +1178,7 @@ class StatusPanel:
         self.rows["source"].configure(text=state.source)
         self.rows["lastsync"].configure(text=state.lastsync_txt)
         if self.btn_startsvc is not None:
-            if state.svc_up is False:
+            if state.svc_up is False and not state.svc_starting:
                 self.btn_startsvc.grid()
             else:
                 self.btn_startsvc.grid_remove()

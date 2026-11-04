@@ -62,7 +62,7 @@ One-time and per-app; it sticks afterward. (Windows 10 shows the icon automatica
 | 🟢 Green  | Clock accurate — \|offset\| < 1 s vs. the reference server |
 | 🟡 Yellow | Drifting (1–2 s), the Windows Time service isn't running, not NTP-synced (on the free-running CMOS clock), or last sync stale (> 40 min) |
 | 🔴 Red    | \|offset\| > 2 s, or the reference server is unreachable |
-| ⚪ Gray   | Starting up / probe error |
+| ⚪ Gray   | Starting up, including the first 5 minutes after Windows boots while the Windows Time service starts and makes its first sync / probe error |
 
 The light follows your **clock's actual accuracy** (the measured offset), so it works
 no matter which NTP server Windows itself uses — you don't have to match the server
@@ -205,6 +205,7 @@ first run). Its defaults:
   "green_max_offset": 1.0,
   "yellow_max_offset": 2.0,
   "stale_minutes": 40,
+  "boot_grace_minutes": 5,
   "dns_cache_minutes": 30,
   "auto_check_updates": false,
   "require_server": false
@@ -217,6 +218,7 @@ first run). Its defaults:
 - **green_max_offset / yellow_max_offset** — thresholds in seconds.
 - **poll_seconds** — how often to probe.
 - **stale_minutes** — if the last successful sync is older than this, don't show green.
+- **boot_grace_minutes** — for this long after Windows starts, a Windows Time service that hasn't started or synced yet shows gray, not yellow: Windows starts it a minute or two after logon, later in a VM. A service set to Manual or Disabled still warns at once.
 - **dns_cache_minutes** — how long to reuse the server's resolved IP. A hostname would
   otherwise be looked up on *every* poll — at the default 45 s that's ~1,900 DNS queries
   a day, enough to look like abuse to a local resolver (`pool.ntp.org` in particular
