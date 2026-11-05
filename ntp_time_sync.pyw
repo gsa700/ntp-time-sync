@@ -52,7 +52,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 APP_NAME = "NTP Time Sync"
-APP_VERSION = "1.3.25"
+APP_VERSION = "1.3.26"
 REPO = "gsa700/ntp-time-sync"
 RELEASES_URL = "https://github.com/%s/releases/latest" % REPO
 API_LATEST = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -1204,13 +1204,26 @@ def _version_tuple(s):
     return tuple(out)
 
 
+def _tls_context():
+    """Verify HTTPS through Windows itself (CryptoAPI), which fetches missing
+    root certificates on demand like Edge does. Plain Python only trusts roots
+    already in the store, so a fresh PC that never used Edge fails with
+    CERTIFICATE_VERIFY_FAILED. Falls back to the default if truststore is absent."""
+    import ssl
+    try:
+        import truststore
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        return ssl.create_default_context()
+
+
 def check_updates(manual=False):
     """Query GitHub for the latest release; report via the panel. Runs in a thread."""
     import urllib.request
     import json
     try:
         req = urllib.request.Request(API_LATEST, headers={"User-Agent": APP_NAME})
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=8, context=_tls_context()) as resp:
             data = json.load(resp)
     except Exception as e:
         panel.notify_update("error", err=str(e), manual=manual)
@@ -1244,7 +1257,8 @@ def self_update(url, latest):
     old = os.path.join(folder, "update.old.exe")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        # The asset download redirects to another GitHub host; same context.
+        with urllib.request.urlopen(req, timeout=120, context=_tls_context()) as resp:
             expected = resp.headers.get("Content-Length")
             data = resp.read()
         if expected is not None and len(data) != int(expected):

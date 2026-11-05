@@ -37,7 +37,7 @@ Write-Host "==> Compile check" -ForegroundColor Cyan
 Write-Host "==> Building exe (PyInstaller)" -ForegroundColor Cyan
 & $py -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name "NTP Time Sync" --icon "$root\app.ico" `
-    --hidden-import pystray._win32 `
+    --hidden-import pystray._win32 --hidden-import truststore `
     --distpath dist --workpath build --specpath build ntp_time_sync.pyw | Out-Null
 
 $built = Join-Path $root "dist\NTP Time Sync.exe"

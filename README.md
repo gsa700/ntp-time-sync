@@ -98,7 +98,9 @@ header over the live readout, with every action one click away:
 When a newer release exists, **Check for updates** offers to **download and install
 it in place**, then asks to **Restart now** to finish (or choose No — it also starts
 at your next sign-in). No manual re-download; no admin needed. Auto-check only
-*notifies* — installing is always a click.
+*notifies* — installing is always a click. Update checks verify GitHub's certificate
+through Windows itself, so they also work on a fresh PC that hasn't fetched that root
+certificate yet.
 
 Polling is read-only and runs **non-elevated**; only Resync and Configure raise
 a UAC prompt on demand.
